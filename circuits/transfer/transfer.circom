@@ -39,10 +39,15 @@ template Transfer() {
     // Verify Merkle path
     var current = inCommitment;
     for (var i = 0; i < 32; i++) {
+        component poseidonHash = Poseidon(2);
         if (inPathIndices[i] == 0) {
-            current = Poseidon(2)([current, inPathElements[i]]);
+            poseidonHash.inputs[0] <== current;
+            poseidonHash.inputs[1] <== inPathElements[i];
+            current = poseidonHash.out;
         } else {
-            current = Poseidon(2)([inPathElements[i], current]);
+            poseidonHash.inputs[0] <== inPathElements[i];
+            poseidonHash.inputs[1] <== current;
+            current = poseidonHash.out;
         }
     }
     current === merkleRoot;
