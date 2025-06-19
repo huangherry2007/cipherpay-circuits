@@ -7,24 +7,36 @@ include "circomlib/circuits/comparators.circom";
 // Main transfer circuit for shielded transfers
 template Transfer() {
     // Private inputs
-    signal private input inAmount;
-    signal private input inNullifier;
-    signal private input inSecret;
-    signal private input inPathElements[32];
-    signal private input inPathIndices[32];
+    signal input inAmount;
+    signal input inNullifier;
+    signal input inSecret;
+    signal input inPathElements[32];
+    signal input inPathIndices[32];
 
     // Public inputs
-    signal input outCommitment;
     signal input merkleRoot;
     signal input recipientPubKey;
 
     // Outputs
     signal output outNullifier;
+    signal output outCommitment;
+
+    // Merkle path signals
+    signal left[32];
+    signal right[32];
 
     // Components
-    component poseidon = Poseidon(2);
+    component poseidonCommitment = Poseidon(2);  // For input commitment
+    component poseidonNullifier = Poseidon(2);   // For nullifier generation
+    component poseidonOutput = Poseidon(2);      // For output commitment
     component bitify = Num2Bits(32);
     component isLessThan = LessThan(32);
+    component poseidonHash[32];  // Array of Poseidon components for Merkle path
+
+    // Initialize Poseidon components for Merkle path
+    for (var i = 0; i < 32; i++) {
+        poseidonHash[i] = Poseidon(2);
+    }
 
     // Verify input amount is positive
     bitify.in <== inAmount;
@@ -32,35 +44,35 @@ template Transfer() {
     isLessThan.in[1] <== inAmount;
 
     // Generate input commitment
-    poseidon.inputs[0] <== inAmount;
-    poseidon.inputs[1] <== inSecret;
-    var inCommitment = poseidon.out;
+    poseidonCommitment.inputs[0] <== inAmount;
+    poseidonCommitment.inputs[1] <== inSecret;
+    var inCommitment = poseidonCommitment.out;
 
     // Verify Merkle path
     var current = inCommitment;
     for (var i = 0; i < 32; i++) {
-        component poseidonHash = Poseidon(2);
-        if (inPathIndices[i] == 0) {
-            poseidonHash.inputs[0] <== current;
-            poseidonHash.inputs[1] <== inPathElements[i];
-            current = poseidonHash.out;
-        } else {
-            poseidonHash.inputs[0] <== inPathElements[i];
-            poseidonHash.inputs[1] <== current;
-            current = poseidonHash.out;
-        }
+        // Use binary selection with quadratic constraints
+        // left = inPathIndices[i] ? inPathElements[i] : current
+        left[i] <== inPathIndices[i] * (inPathElements[i] - current) + current;
+        
+        // right = inPathIndices[i] ? current : inPathElements[i]
+        right[i] <== inPathIndices[i] * (current - inPathElements[i]) + inPathElements[i];
+        
+        poseidonHash[i].inputs[0] <== left[i];
+        poseidonHash[i].inputs[1] <== right[i];
+        current = poseidonHash[i].out;
     }
     current === merkleRoot;
 
     // Generate nullifier
-    poseidon.inputs[0] <== inNullifier;
-    poseidon.inputs[1] <== inSecret;
-    outNullifier <== poseidon.out;
+    poseidonNullifier.inputs[0] <== inNullifier;
+    poseidonNullifier.inputs[1] <== inSecret;
+    outNullifier <== poseidonNullifier.out;
 
     // Generate output commitment
-    poseidon.inputs[0] <== inAmount;
-    poseidon.inputs[1] <== recipientPubKey;
-    outCommitment <== poseidon.out;
+    poseidonOutput.inputs[0] <== inAmount;
+    poseidonOutput.inputs[1] <== recipientPubKey;
+    outCommitment <== poseidonOutput.out;
 }
 
 // Helper circuit for note commitment

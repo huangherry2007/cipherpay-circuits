@@ -5,19 +5,31 @@ include "circomlib/circuits/poseidon.circom";
 // Nullifier generation circuit
 template Nullifier() {
     // Private inputs
-    signal private input noteCommitment;
-    signal private input secret;
+    signal input noteCommitment;
+    signal input secret;
 
     // Public output
     signal output nullifier;
 
     // Components
-    component poseidon = Poseidon(2);
+    component poseidonNullifier = Poseidon(2);
 
     // Generate nullifier using Poseidon hash
+    poseidonNullifier.inputs[0] <== noteCommitment;
+    poseidonNullifier.inputs[1] <== secret;
+    nullifier <== poseidonNullifier.out;
+}
+
+// Helper circuit for nullifier generation
+template NullifierGeneration() {
+    signal input noteCommitment;
+    signal input secret;
+    signal output out;
+
+    component poseidon = Poseidon(2);
     poseidon.inputs[0] <== noteCommitment;
     poseidon.inputs[1] <== secret;
-    nullifier <== poseidon.out;
+    out <== poseidon.out;
 }
 
 // Main component
