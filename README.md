@@ -18,6 +18,56 @@ This repository contains the zero-knowledge circuits used by CipherPay for priva
 - `audit_proof.circom`: Generates audit proofs for compliance
 - `withdraw.circom`: Handles withdrawal of funds from private to public
 
+## Circuit Details
+
+### Transfer Circuit (`transfer.circom`)
+**Purpose**: Enables private transfers between users with full privacy guarantees.
+- **Private Inputs**: Input notes, output notes, recipient, amount, fee, secrets
+- **Public Outputs**: New commitments, nullifiers, fee commitment
+- **Security**: Prevents double-spending, ensures amount conservation
+
+### Merkle Circuit (`merkle.circom`)
+**Purpose**: Verifies Merkle tree membership for note commitments.
+- **Private Inputs**: Leaf commitment, Merkle path, path indices
+- **Public Outputs**: Merkle root verification
+- **Security**: Ensures notes exist in the current state tree
+
+### Nullifier Circuit (`nullifier.circom`)
+**Purpose**: Generates unique nullifiers for spent notes.
+- **Private Inputs**: Note commitment, secret
+- **Public Outputs**: Nullifier hash
+- **Security**: Prevents double-spending of notes
+
+### ZK Stream Circuit (`zkStream.circom`)
+**Purpose**: Handles streaming payments with time-based release.
+- **Private Inputs**: Commitment, recipient, start/end times, current time, amount
+- **Public Outputs**: Stream validity, release amount
+- **Security**: Ensures time-based conditions are met
+
+### ZK Split Circuit (`zkSplit.circom`)
+**Purpose**: Manages payment splitting among multiple recipients.
+- **Private Inputs**: Input note, output notes, total amount
+- **Public Outputs**: Split validity, individual amounts
+- **Security**: Ensures split amounts sum correctly
+
+### ZK Condition Circuit (`zkCondition.circom`)
+**Purpose**: Handles conditional payments with various condition types.
+- **Private Inputs**: Commitment, condition type, condition data, recipient, amount
+- **Public Outputs**: Condition validity, payment eligibility
+- **Security**: Supports time-based, event-based, and threshold-based conditions
+
+### Audit Proof Circuit (`audit_proof.circom`)
+**Purpose**: Generates audit proofs for compliance requirements.
+- **Private Inputs**: Notes, view key, total amount, timestamp
+- **Public Outputs**: Audit proof validity
+- **Security**: Maintains compliance while preserving privacy
+
+### Withdraw Circuit (`withdraw.circom`)
+**Purpose**: Handles withdrawal of funds from private to public addresses.
+- **Private Inputs**: Input notes, recipient, amount, fee
+- **Public Outputs**: Withdrawal validity, public transfer
+- **Security**: Ensures proper withdrawal with fee handling
+
 ## Chain-Agnostic Design
 
 The circuits are designed to be chain-agnostic, meaning they can be used with any blockchain that supports zero-knowledge proofs. This is achieved through:
@@ -37,20 +87,53 @@ The circuits are designed to be chain-agnostic, meaning they can be used with an
    - Verification keys can be used by any chain
    - No chain-specific constraints
 
-## Building Circuits
+## Setup and Build Process
 
+### Prerequisites
+- Node.js >= 16.x
+- npm or yarn
+- Circom compiler
+- snarkjs
+
+### Installation
 ```bash
 # Install dependencies
 npm install
 
-# Build all circuits
-npm run build:all
+# Install circom globally (if not already installed)
+npm install -g circom
 
-# Build specific circuit
-npm run build:stream  # For zkStream circuit
-npm run build:split   # For zkSplit circuit
-npm run build:condition  # For zkCondition circuit
+# Install snarkjs globally (if not already installed)
+npm install -g snarkjs
 ```
+
+### Building Circuits
+```bash
+# Build all circuits and generate keys
+npm run setup
+
+# This command will:
+# 1. Compile all circuits to R1CS format
+# 2. Generate WebAssembly files
+# 3. Create proving keys (.zkey files)
+# 4. Export verification keys (verifier-*.json files)
+# 5. Copy files to all repositories
+```
+
+### Generated Files
+For each circuit, the following files are generated:
+- `{circuit}.r1cs`: R1CS constraint system
+- `{circuit}.wasm`: WebAssembly circuit
+- `{circuit}.zkey`: Proving key (Groth16)
+- `verifier-{circuit}.json`: Verification key
+
+### File Distribution
+The setup script automatically copies verification keys to:
+- `cipherpay-sdk/src/zk/circuits/`
+- `cipherpay-evm/src/zk/circuits/`
+- `cipherpay-anchor/src/zk/circuits/`
+- `cipherpay-relayer-evm/src/zk/circuits/`
+- `cipherpay-relayer-solana/src/zk/circuits/`
 
 ## Circuit Integration
 
@@ -62,7 +145,7 @@ All circuits expect inputs in the following format:
 
 ### Output Format
 Circuits output:
-- Zero-knowledge proofs
+- Zero-knowledge proofs (Groth16 format)
 - Public signals
 - Verification keys
 
@@ -71,7 +154,7 @@ To integrate with a specific chain:
 
 1. Build the circuits:
 ```bash
-npm run build:all
+npm run setup
 ```
 
 2. Use the generated files:
@@ -110,6 +193,11 @@ npm test -- -t "ZkStream"
    - Standard proof verification
    - Chain-agnostic verification rules
    - No chain-specific verification logic
+
+4. **Trusted Setup**
+   - Groth16 trusted setup performed
+   - Toxic waste properly destroyed
+   - Verification keys distributed securely
 
 ## Contributing
 
