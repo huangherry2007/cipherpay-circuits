@@ -1,36 +1,34 @@
-pragma circom 2.0.0;
+pragma circom 2.1.4;
 
 include "circomlib/circuits/poseidon.circom";
 
-// Nullifier generation circuit
+// CipherPay Nullifier Component
+// Generates nullifiers using ownerCipherPayPubKey for cryptographic binding
+// Nullifier = Poseidon(ownerCipherPayPubKey, randomness, tokenId)
+// Where ownerCipherPayPubKey = Poseidon(ownerWalletPubKey, ownerWalletPrivKey)
+
 template Nullifier() {
-    // Private inputs
-    signal input noteCommitment;
-    signal input secret;
-
-    // Public output
+    // === Private Inputs === 
+    signal input ownerWalletPubKey;     // Public key from MetaMask or Phantom
+    signal input ownerWalletPrivKey;    // Matching private key (kept secret)
+    signal input randomness;                // Same randomness used in commitment
+    signal input tokenId;                   // Same tokenId used in commitment
+    
+    // === Public Output === 
     signal output nullifier;
-
-    // Components
-    component poseidonNullifier = Poseidon(2);
-
-    // Generate nullifier using Poseidon hash
-    poseidonNullifier.inputs[0] <== noteCommitment;
-    poseidonNullifier.inputs[1] <== secret;
-    nullifier <== poseidonNullifier.out;
+    
+    // === Owner Ownership Binding === 
+    // Compute ownerCipherPayPubKey for cryptographic binding
+    component ownerCipherPayPubKey = Poseidon(2);
+    ownerCipherPayPubKey.inputs[0] <== ownerWalletPubKey;
+    ownerCipherPayPubKey.inputs[1] <== ownerWalletPrivKey;
+    
+    // === Nullifier Generation === 
+    // Generate nullifier using ownerCipherPayPubKey
+    component nullifierHash = Poseidon(3);
+    nullifierHash.inputs[0] <== ownerCipherPayPubKey.out;
+    nullifierHash.inputs[1] <== randomness;
+    nullifierHash.inputs[2] <== tokenId;
+    
+    nullifier <== nullifierHash.out;
 }
-
-// Helper circuit for nullifier generation
-template NullifierGeneration() {
-    signal input noteCommitment;
-    signal input secret;
-    signal output out;
-
-    component poseidon = Poseidon(2);
-    poseidon.inputs[0] <== noteCommitment;
-    poseidon.inputs[1] <== secret;
-    out <== poseidon.out;
-}
-
-// Main component
-component main = Nullifier(); 

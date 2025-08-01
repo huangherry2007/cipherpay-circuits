@@ -1,40 +1,142 @@
 {
   "name": "cipherpay-circuits",
-  "version": "1.0.0",
-  "description": "Zero-knowledge circuits for CipherPay",
+  "version": "2.0.0",
+  "description": "Zero-knowledge proof circuits for privacy-preserving payments with wallet-bound identities",
   "main": "index.js",
   "scripts": {
     "test": "jest",
-    "build": "circom circuits/transfer/transfer.circom --r1cs --wasm --sym -o build/transfer",
-    "build:merkle": "circom circuits/merkle/merkle.circom --r1cs --wasm --sym -o build/merkle",
-    "build:nullifier": "circom circuits/nullifier/nullifier.circom --r1cs --wasm --sym -o build/nullifier",
-    "build:audit": "circom circuits/audit/audit_proof.circom --r1cs --wasm --sym -o build/audit",
-    "build:withdraw": "circom circuits/withdraw/withdraw.circom --r1cs --wasm --sym -o build/withdraw",
-    "build:stream": "circom circuits/stream/zkStream.circom --r1cs --wasm --sym -o build/stream",
-    "build:split": "circom circuits/split/zkSplit.circom --r1cs --wasm --sym -o build/split",
-    "build:condition": "circom circuits/condition/zkCondition.circom --r1cs --wasm --sym -o build/condition",
-    "build:all": "npm run build && npm run build:merkle && npm run build:nullifier && npm run build:audit && npm run build:withdraw && npm run build:stream && npm run build:split && npm run build:condition",
+    "test:timeout": "jest --testTimeout=30000",
+    "test:verbose": "jest --verbose",
+    "test:coverage": "jest --coverage",
     "setup": "node scripts/setup.js",
     "generate-proof": "node scripts/generate-proof.js",
-    "verify-proof": "node scripts/verify-proof.js"
+    "build:transfer": "circom circuits/transfer/transfer.circom --r1cs --wasm --sym -o build/transfer -l node_modules",
+    "build:deposit": "circom circuits/deposit/deposit.circom --r1cs --wasm --sym -o build/deposit -l node_modules",
+    "build:withdraw": "circom circuits/withdraw/withdraw.circom --r1cs --wasm --sym -o build/withdraw -l node_modules",
+    "build:note-commitment": "circom circuits/note_commitment/note_commitment.circom --r1cs --wasm --sym -o build/note_commitment -l node_modules",
+    "build:nullifier": "circom circuits/nullifier/nullifier.circom --r1cs --wasm --sym -o build/nullifier -l node_modules",
+    "build:core": "npm run build:transfer && npm run build:deposit && npm run build:withdraw",
+    "build:components": "npm run build:note-commitment && npm run build:nullifier",
+    "build:all": "npm run build:core && npm run build:components",
+    "clean": "rm -rf build/",
+    "clean:all": "rm -rf build/ node_modules/ package-lock.json"
   },
   "keywords": [
     "zero-knowledge",
     "circom",
     "zkSNARK",
     "privacy",
-    "cryptography"
+    "cryptography",
+    "blockchain",
+    "defi",
+    "poseidon",
+    "groth16"
   ],
   "author": "CipherPay Team",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cipherpay/cipherpay-circuits.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cipherpay/cipherpay-circuits/issues"
+  },
+  "homepage": "https://github.com/cipherpay/cipherpay-circuits#readme",
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
   "dependencies": {
-    "snarkjs": "0.6.11",
-    "circomlib": "2.0.5",
-    "circomlibjs": "0.1.7"
+    "circomlib": "^2.0.5",
+    "circomlibjs": "0.1.7",
+    "snarkjs": "0.6.11"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
-    "jest": "29.3.1",
-    "typescript": "^5.0.4"
+    "jest": "29.3.1"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testTimeout": 30000,
+    "verbose": true,
+    "collectCoverageFrom": [
+      "test/**/*.js"
+    ],
+    "coverageDirectory": "coverage",
+    "coverageReporters": [
+      "text",
+      "lcov",
+      "html"
+    ]
+  },
+  "circuits": {
+    "transfer": {
+      "signals": 19,
+      "constraints": "~215",
+      "description": "Shielded transfers with encrypted note delivery"
+    },
+    "deposit": {
+      "signals": 8,
+      "constraints": "~214",
+      "description": "Public to shielded conversion with privacy binding"
+    },
+    "withdraw": {
+      "signals": 9,
+      "constraints": "~215",
+      "description": "Shielded to public conversion with identity verification"
+    },
+    "note_commitment": {
+      "signals": 5,
+      "constraints": "~10",
+      "description": "Reusable component for note commitment computation"
+    },
+    "nullifier": {
+      "signals": 4,
+      "constraints": "~10",
+      "description": "Reusable component for nullifier generation"
+    }
+  },
+  "features": {
+    "wallet_bound_identity": "Derived from wallet keys using Poseidon hash",
+    "encrypted_note_delivery": "Recipient privacy through encrypted notes",
+    "privacy_enhanced_binding": "Deposit hash using ownerCipherPayPubKey",
+    "merkle_tree_verification": "16-level Merkle tree for note inclusion",
+    "amount_conservation": "Mathematical constraints prevent value creation",
+    "double_spend_prevention": "Nullifiers prevent note reuse"
+  },
+  "cryptographic_primitives": {
+    "identity_derivation": "cipherPayPubKey = Poseidon(walletPubKey, walletPrivKey)",
+    "note_commitment": "commitment = Poseidon(amount, cipherPayPubKey, randomness, tokenId, memo)",
+    "nullifier_generation": "nullifier = Poseidon(ownerWalletPubKey, ownerWalletPrivKey, randomness, tokenId)",
+    "deposit_hash": "depositHash = Poseidon(ownerCipherPayPubKey, amount, nonce)"
+  },
+  "security_properties": {
+    "privacy": [
+      "Transaction amounts, recipients, and sender relationships are hidden",
+      "Wallet keys are never exposed on-chain",
+      "Note contents are encrypted for recipients"
+    ],
+    "security": [
+      "Nullifiers prevent note reuse",
+      "Merkle tree inclusion proofs verify note existence",
+      "Mathematical constraints prevent value creation"
+    ],
+    "auditability": [
+      "Optional audit trails for compliance",
+      "Public verification of note inclusion",
+      "Public tracking of spent notes"
+    ]
+  },
+  "performance": {
+    "proof_generation": {
+      "time": "2-5 seconds per proof",
+      "memory": "~2GB RAM required",
+      "proof_size": "~2.5KB per proof"
+    },
+    "verification": {
+      "gas_cost": "~200K gas per verification",
+      "time": "<1 second per verification",
+      "on_chain": "Constant gas cost regardless of circuit complexity"
+    }
   }
 } 

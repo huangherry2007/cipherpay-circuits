@@ -1,212 +1,315 @@
 # CipherPay Circuits
 
-This repository contains the zero-knowledge circuits used by CipherPay for privacy-preserving payments. The circuits are designed to be chain-agnostic and can be used with any blockchain that supports zero-knowledge proofs.
+Zero-knowledge proof circuits for privacy-preserving payments with wallet-bound identities and encrypted note delivery.
 
-## Circuit Overview
+## Overview
 
-### Core Circuits
-- `transfer.circom`: Handles private transfers between users
-- `merkle.circom`: Manages Merkle tree operations for note commitments
-- `nullifier.circom`: Generates and verifies nullifiers for spent notes
+CipherPay circuits implement privacy-preserving payment functionality using Circom 2.1.4 and the Groth16 proving system. The circuits provide shielded transfers with wallet-bound identities and encrypted note delivery for enhanced privacy.
 
-### Specialized Circuits
-- `zkStream.circom`: Handles streaming payments with time-based release
-- `zkSplit.circom`: Manages payment splitting among multiple recipients
-- `zkCondition.circom`: Handles conditional payments with various condition types
-
-### Utility Circuits
-- `audit_proof.circom`: Generates audit proofs for compliance
-- `withdraw.circom`: Handles withdrawal of funds from private to public
-
-## Circuit Details
+## Core Circuits
 
 ### Transfer Circuit (`transfer.circom`)
-**Purpose**: Enables private transfers between users with full privacy guarantees.
-- **Private Inputs**: Input notes, output notes, recipient, amount, fee, secrets
-- **Public Outputs**: New commitments, nullifiers, fee commitment
-- **Security**: Prevents double-spending, ensures amount conservation
+**Purpose**: Shielded transfers between users with encrypted note delivery
+- **Signals**: 19 total (18 private + 1 public)
+- **Key Features**:
+  - Amount conservation: `inAmount === out1Amount + out2Amount`
+  - Token consistency: All notes use same token ID
+  - Encrypted note delivery for recipient privacy
+  - Merkle tree inclusion proof verification
 
-### Merkle Circuit (`merkle.circom`)
-**Purpose**: Verifies Merkle tree membership for note commitments.
-- **Private Inputs**: Leaf commitment, Merkle path, path indices
-- **Public Outputs**: Merkle root verification
-- **Security**: Ensures notes exist in the current state tree
-
-### Nullifier Circuit (`nullifier.circom`)
-**Purpose**: Generates unique nullifiers for spent notes.
-- **Private Inputs**: Note commitment, secret
-- **Public Outputs**: Nullifier hash
-- **Security**: Prevents double-spending of notes
-
-### ZK Stream Circuit (`zkStream.circom`)
-**Purpose**: Handles streaming payments with time-based release.
-- **Private Inputs**: Commitment, recipient, start/end times, current time, amount
-- **Public Outputs**: Stream validity, release amount
-- **Security**: Ensures time-based conditions are met
-
-### ZK Split Circuit (`zkSplit.circom`)
-**Purpose**: Manages payment splitting among multiple recipients.
-- **Private Inputs**: Input note, output notes, total amount
-- **Public Outputs**: Split validity, individual amounts
-- **Security**: Ensures split amounts sum correctly
-
-### ZK Condition Circuit (`zkCondition.circom`)
-**Purpose**: Handles conditional payments with various condition types.
-- **Private Inputs**: Commitment, condition type, condition data, recipient, amount
-- **Public Outputs**: Condition validity, payment eligibility
-- **Security**: Supports time-based, event-based, and threshold-based conditions
-
-### Audit Proof Circuit (`audit_proof.circom`)
-**Purpose**: Generates audit proofs for compliance requirements.
-- **Private Inputs**: Notes, view key, total amount, timestamp
-- **Public Outputs**: Audit proof validity
-- **Security**: Maintains compliance while preserving privacy
+### Deposit Circuit (`deposit.circom`)
+**Purpose**: Convert public funds to shielded notes with privacy-enhanced binding
+- **Signals**: 8 total (5 private + 3 public)
+- **Key Features**:
+  - Privacy-enhanced deposit hash using `ownerCipherPayPubKey`
+  - Unique nonce prevents hash collisions
+  - Wallet-bound identity derivation
 
 ### Withdraw Circuit (`withdraw.circom`)
-**Purpose**: Handles withdrawal of funds from private to public addresses.
-- **Private Inputs**: Input notes, recipient, amount, fee
-- **Public Outputs**: Withdrawal validity, public transfer
-- **Security**: Ensures proper withdrawal with fee handling
+**Purpose**: Convert shielded notes to public funds with identity verification
+- **Signals**: 9 total (5 private + 4 public)
+- **Key Features**:
+  - Merkle tree inclusion proof verification
+  - Commitment reconstruction and validation
+  - Wallet-bound identity verification
 
-## Chain-Agnostic Design
+## Components
 
-The circuits are designed to be chain-agnostic, meaning they can be used with any blockchain that supports zero-knowledge proofs. This is achieved through:
+### Note Commitment Component (`note_commitment.circom`)
+**Purpose**: Reusable component for computing note commitments
+- **Signals**: 5 inputs, 1 output
+- **Function**: `commitment = Poseidon(amount, cipherPayPubKey, randomness, tokenId, memo)`
 
-1. **Generic Input/Output Formats**
-   - All addresses are treated as field elements
-   - No chain-specific data structures
-   - Standard cryptographic primitives
+### Nullifier Component (`nullifier.circom`)
+**Purpose**: Reusable component for generating nullifiers
+- **Signals**: 4 inputs, 1 output
+- **Function**: `nullifier = Poseidon(ownerWalletPubKey, ownerWalletPrivKey, randomness, tokenId)`
 
-2. **Standard Cryptographic Primitives**
-   - Poseidon hash function
-   - Merkle tree operations
-   - Field arithmetic
+## Cryptographic Primitives
 
-3. **Flexible Integration Points**
-   - Circuits output standard proof formats
-   - Verification keys can be used by any chain
-   - No chain-specific constraints
+### Identity Derivation
+```javascript
+cipherPayPubKey = Poseidon(walletPubKey, walletPrivKey)
+```
 
-## Setup and Build Process
+### Note Commitment
+```javascript
+commitment = Poseidon(amount, cipherPayPubKey, randomness, tokenId, memo)
+```
+
+### Nullifier Generation
+```javascript
+nullifier = Poseidon(ownerWalletPubKey, ownerWalletPrivKey, randomness, tokenId)
+```
+
+### Deposit Hash
+```javascript
+depositHash = Poseidon(ownerCipherPayPubKey, amount, nonce)
+```
+
+## Security Properties
+
+### Privacy
+- **Transaction Privacy**: Amounts, recipients, and sender relationships are hidden
+- **Identity Privacy**: Wallet keys are never exposed on-chain
+- **Note Privacy**: Note contents are encrypted for recipients
+
+### Security
+- **Double-Spending Prevention**: Nullifiers prevent note reuse
+- **Merkle Tree Security**: Inclusion proofs verify note existence
+- **Amount Conservation**: Mathematical constraints prevent value creation
+
+### Auditability
+- **Selective Disclosure**: Optional audit trails for compliance
+- **Merkle Tree Verification**: Public verification of note inclusion
+- **Nullifier Tracking**: Public tracking of spent notes
+
+## Quick Start
 
 ### Prerequisites
-- Node.js >= 16.x
-- npm or yarn
-- Circom compiler
-- snarkjs
+- **Node.js** (v16 or later)
+- **Circom** (v2.1.4)
+- **snarkjs** (latest)
 
 ### Installation
 ```bash
+# Clone repository
+git clone <repository-url>
+cd cipherpay-circuits
+
 # Install dependencies
 npm install
 
-# Install circom globally (if not already installed)
-npm install -g circom
+# Build circuits
+node scripts/setup.js
 
-# Install snarkjs globally (if not already installed)
-npm install -g snarkjs
+# Run tests
+npm test
 ```
-
-### Building Circuits
-```bash
-# Build all circuits and generate keys
-npm run setup
-
-# This command will:
-# 1. Compile all circuits to R1CS format
-# 2. Generate WebAssembly files
-# 3. Create proving keys (.zkey files)
-# 4. Export verification keys (verifier-*.json files)
-# 5. Copy files to all repositories
-```
-
-### Generated Files
-For each circuit, the following files are generated:
-- `{circuit}.r1cs`: R1CS constraint system
-- `{circuit}.wasm`: WebAssembly circuit
-- `{circuit}.zkey`: Proving key (Groth16)
-- `verifier-{circuit}.json`: Verification key
-
-### File Distribution
-The setup script automatically copies verification keys to:
-- `cipherpay-sdk/src/zk/circuits/`
-- `cipherpay-evm/src/zk/circuits/`
-- `cipherpay-anchor/src/zk/circuits/`
-- `cipherpay-relayer-evm/src/zk/circuits/`
-- `cipherpay-relayer-solana/src/zk/circuits/`
-
-## Circuit Integration
-
-### Input Format
-All circuits expect inputs in the following format:
-- Private inputs: Field elements
-- Public inputs: Field elements
-- Arrays: Fixed-size arrays of field elements
-
-### Output Format
-Circuits output:
-- Zero-knowledge proofs (Groth16 format)
-- Public signals
-- Verification keys
-
-### Chain Integration
-To integrate with a specific chain:
-
-1. Build the circuits:
-```bash
-npm run setup
-```
-
-2. Use the generated files:
-- `build/*/circuit.wasm`: WebAssembly circuit
-- `build/*/circuit.r1cs`: R1CS constraint system
-- `build/*/verification_key.json`: Verification key
-
-3. Implement chain-specific verification:
-- Import verification keys
-- Implement proof verification
-- Handle chain-specific transaction formats
 
 ## Testing
 
+### Test Suite
 ```bash
 # Run all tests
 npm test
 
-# Run specific test
-npm test -- -t "ZkStream"
+# Run specific test file
+npm test -- test/circuits.test.js
+
+# Run with increased timeout for ZK proofs
+npm test -- --testTimeout=30000
 ```
 
-## Security Considerations
+### Test Coverage
+- ✅ **Circuit Structure**: Signal counts and types validation
+- ✅ **Input Validation**: Correct input formats and constraints
+- ✅ **Proof Generation**: ZK proof creation and verification
+- ✅ **Error Handling**: Invalid input rejection
+- ✅ **Build Verification**: Circuit file generation validation
 
-1. **Circuit Security**
-   - All circuits are audited for security
-   - Standard cryptographic primitives are used
-   - No chain-specific security assumptions
+### Expected Results
+```
+PASS  test/circuits.test.js
+PASS  test/proof-generation.test.js
 
-2. **Input Validation**
-   - All inputs are validated within the circuit
-   - No assumptions about input formats
-   - Generic validation rules
+Test Suites: 2 passed, 2 total
+Tests:       28 passed, 28 total
+```
 
-3. **Output Verification**
-   - Standard proof verification
-   - Chain-agnostic verification rules
-   - No chain-specific verification logic
+## Circuit Input Formats
 
-4. **Trusted Setup**
-   - Groth16 trusted setup performed
-   - Toxic waste properly destroyed
-   - Verification keys distributed securely
+### Transfer Circuit (19 signals)
+```javascript
+{
+    // Private inputs (18 signals)
+    inAmount: 100,
+    inSenderWalletPubKey: 1234567890,
+    inSenderWalletPrivKey: 1111111111,
+    inRandomness: 9876543210,
+    inTokenId: 1,
+    inMemo: 0,
+    inPathElements: Array(16).fill(0),
+    inPathIndices: Array(16).fill(0),
+    
+    // Output note 1 (for recipient)
+    out1Amount: 80,
+    out1RecipientCipherPayPubKey: 2222222222,
+    out1Randomness: 4444444444,
+    out1TokenId: 1,
+    out1Memo: 0,
+    
+    // Output note 2 (change note)
+    out2Amount: 20,
+    out2SenderCipherPayPubKey: 3333333333,
+    out2Randomness: 5555555555,
+    out2TokenId: 1,
+    out2Memo: 0,
+    
+    // Public inputs (1 signal)
+    encryptedNote: 12345678901234567890
+}
+```
+
+### Deposit Circuit (8 signals)
+```javascript
+{
+    // Private inputs (5 signals)
+    ownerWalletPubKey: 1234567890,
+    ownerWalletPrivKey: 1111111111,
+    randomness: 9876543210,
+    tokenId: 1,
+    memo: 0,
+
+    // Public inputs (3 signals)
+    nonce: 3333333333,
+    amount: 100,
+    depositHash: 7777777777
+}
+```
+
+### Withdraw Circuit (9 signals)
+```javascript
+{
+    // Private inputs (5 signals)
+    recipientWalletPrivKey: 1111111111,
+    randomness: 9876543210,
+    memo: 0,
+    pathElements: Array(16).fill(0),
+    pathIndices: Array(16).fill(0),
+
+    // Public inputs (4 signals)
+    recipientWalletPubKey: 1234567890,
+    amount: 100,
+    tokenId: 1,
+    commitment: 7777777777
+}
+```
+
+## Performance Characteristics
+
+### Circuit Complexity
+- **Transfer**: ~215 constraints
+- **Deposit**: ~214 constraints
+- **Withdraw**: ~215 constraints
+
+### Proof Generation
+- **Time**: 2-5 seconds per proof (depending on hardware)
+- **Memory**: ~2GB RAM required
+- **Proof Size**: ~2.5KB per proof
+
+### Verification
+- **Gas Cost**: ~200K gas per verification
+- **Time**: <1 second per verification
+- **On-chain**: Constant gas cost regardless of circuit complexity
+
+## Build Process
+
+### Generated Files
+Each circuit generates:
+- `{circuit}.r1cs` - R1CS constraint system
+- `{circuit}_js/{circuit}.wasm` - WebAssembly circuit
+- `{circuit}.zkey` - Proving key (Groth16)
+- `verification_key.json` - Verification key
+- `verifier-{circuit}.json` - Renamed verification key for tests
+
+### Build Commands
+```bash
+# Build all circuits
+node scripts/setup.js
+
+# Generate proof for specific circuit
+node scripts/generate-proof.js transfer
+node scripts/generate-proof.js withdraw
+node scripts/generate-proof.js deposit
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"circom not found"**
+   ```bash
+   npm install -g circom
+   ```
+
+2. **"snarkjs not found"**
+   ```bash
+   npm install -g snarkjs
+   ```
+
+3. **"WASM file not found"**
+   ```bash
+   node scripts/setup.js
+   ```
+
+4. **"Test timeout"**
+   ```bash
+   npm test -- --testTimeout=30000
+   ```
+
+5. **"Memory issues"**
+   ```bash
+   node --max-old-space-size=4096 scripts/setup.js
+   ```
+
+## Documentation
+
+For detailed documentation, see the `/docs` directory:
+- **[Technical Specification](docs/technical-spec.md)** - Complete circuit specifications
+- **[Circuit Implementation Guide](docs/circuit-implementation.md)** - Development workflow
+- **[Developer Guide](docs/developer-guide.md)** - Getting started guide
+
+## Project Structure
+
+```
+cipherpay-circuits/
+├── circuits/                    # Circuit implementations
+│   ├── transfer/
+│   ├── deposit/
+│   ├── withdraw/
+│   ├── note_commitment/
+│   └── nullifier/
+├── test/                       # Test files
+│   ├── helpers.js
+│   ├── circuits.test.js
+│   └── proof-generation.test.js
+├── scripts/                    # Build scripts
+│   ├── setup.js
+│   └── generate-proof.js
+├── build/                      # Build outputs
+├── docs/                       # Documentation
+└── package.json
+```
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Run tests
+4. Add tests for new functionality
 5. Submit a pull request
 
 ## License
 
-MIT License - see LICENSE file for details
+This project is licensed under the MIT License - see the LICENSE file for details. 

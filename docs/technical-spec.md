@@ -1,205 +1,238 @@
-# CipherPay Circuits Technical Specification
+# CipherPay Technical Specification
 
 ## Overview
 
-This document provides technical specifications for CipherPay's zero-knowledge circuits. The circuits are designed to be chain-agnostic and implement various privacy-preserving payment functionalities.
+CipherPay is a privacy-preserving payment protocol built on zero-knowledge proofs (ZKPs). The protocol enables shielded transfers with wallet-bound identities, ensuring privacy while maintaining auditability and compliance.
+
+## Core Architecture
+
+### Zero-Knowledge Proof Circuits
+
+CipherPay uses Circom 2.1.4 to implement the following core circuits:
+
+1. **Transfer Circuit** - Shielded transfers between users
+2. **Deposit Circuit** - Converting public funds to shielded notes
+3. **Withdraw Circuit** - Converting shielded notes to public funds
+4. **Note Commitment Component** - Computing note commitments
+5. **Nullifier Component** - Generating nullifiers to prevent double-spending
+
+### Key Design Principles
+
+- **Wallet-Bound Identity**: Users derive CipherPay identities from their wallet keys
+- **Privacy by Default**: All transaction details are shielded by default
+- **Selective Auditability**: Optional audit trails for compliance
+- **Blockchain Agnostic**: Works on any blockchain with elliptic curve cryptography
 
 ## Circuit Specifications
 
-### 1. Transfer Circuit
+### Transfer Circuit
 
-#### Inputs
-- Private:
-  - `inAmount`: Field element
-  - `inNullifier`: Field element
-  - `inSecret`: Field element
-  - `inPathElements[32]`: Array of field elements
-  - `inPathIndices[32]`: Array of field elements
-- Public:
-  - `outCommitment`: Field element
-  - `merkleRoot`: Field element
-  - `recipientPubKey`: Field element
+**Purpose**: Enables shielded transfers between users with encrypted note delivery.
 
-#### Outputs
-- `isValid`: Boolean
-- `outNullifier`: Field element
+**Input Signals** (19 total):
+- **Private Inputs** (18):
+  - `inAmount`: Input note amount
+  - `inSenderWalletPubKey`: Sender's wallet public key
+  - `inSenderWalletPrivKey`: Sender's wallet private key
+  - `inRandomness`: Input note randomness
+  - `inTokenId`: Token identifier
+  - `inMemo`: Optional memo
+  - `inPathElements[16]`: Merkle path elements
+  - `inPathIndices[16]`: Merkle path indices
+  - `out1Amount`: Recipient note amount
+  - `out1RecipientCipherPayPubKey`: Recipient's CipherPay public key
+  - `out1Randomness`: Recipient note randomness
+  - `out1TokenId`: Recipient note token ID
+  - `out1Memo`: Recipient note memo
+  - `out2Amount`: Change note amount
+  - `out2SenderCipherPayPubKey`: Sender's change note CipherPay public key
+  - `out2Randomness`: Change note randomness
+  - `out2TokenId`: Change note token ID
+  - `out2Memo`: Change note memo
+- **Public Inputs** (1):
+  - `encryptedNote`: Encrypted note data for recipient
 
-#### Constraints
-- Input amount must be positive
-- Merkle path must be valid
-- Nullifier must be unique
-- Commitment must be valid
+**Output Signals** (5):
+- `inCommitment`: Input note commitment
+- `outCommitment1`: Recipient note commitment
+- `outCommitment2`: Change note commitment
+- `nullifier`: Nullifier to prevent double-spending
+- `merkleRoot`: Updated Merkle root
 
-### 2. ZkStream Circuit
+**Key Features**:
+- Amount conservation: `inAmount === out1Amount + out2Amount`
+- Token consistency: All notes use same token ID
+- Encrypted note delivery for recipient privacy
+- Merkle tree inclusion proof verification
 
-#### Inputs
-- Private:
-  - `totalAmount`: Field element
-  - `startTime`: Field element
-  - `endTime`: Field element
-  - `currentTime`: Field element
-  - `streamSecret`: Field element
-  - `streamId`: Field element
-- Public:
-  - `recipientAddress`: Field element
-  - `merkleRoot`: Field element
-  - `streamCommitment`: Field element
+### Deposit Circuit
 
-#### Outputs
-- `isValid`: Boolean
-- `availableAmount`: Field element
+**Purpose**: Converts public funds to shielded notes with privacy-enhanced binding.
 
-#### Constraints
-- Time constraints must be valid
-- Commitment must be valid
-- Amount calculation must be correct
+**Input Signals** (8 total):
+- **Private Inputs** (5):
+  - `ownerWalletPubKey`: Owner's wallet public key
+  - `ownerWalletPrivKey`: Owner's wallet private key
+  - `randomness`: Note randomness
+  - `tokenId`: Token identifier
+  - `memo`: Optional memo
+- **Public Inputs** (3):
+  - `nonce`: Unique deposit nonce
+  - `amount`: Deposit amount
+  - `depositHash`: Hash binding owner identity to deposit
 
-### 3. ZkSplit Circuit
+**Output Signals** (2):
+- `newCommitment`: New shielded note commitment
+- `ownerCipherPayPubKey`: Derived CipherPay identity
 
-#### Inputs
-- Private:
-  - `totalAmount`: Field element
-  - `splitSecret`: Field element
-  - `splitId`: Field element
-  - `numRecipients`: Field element
-- Public:
-  - `recipientAddresses[10]`: Array of field elements
-  - `splitAmounts[10]`: Array of field elements
-  - `merkleRoot`: Field element
-  - `splitCommitment`: Field element
+**Key Features**:
+- Privacy-enhanced deposit hash using `ownerCipherPayPubKey`
+- Unique nonce prevents hash collisions
+- Wallet-bound identity derivation
 
-#### Outputs
-- `isValid`: Boolean
+### Withdraw Circuit
 
-#### Constraints
-- Total amount must match sum of splits
-- All amounts must be positive
-- All recipients must be valid
-- Commitment must be valid
+**Purpose**: Converts shielded notes to public funds with identity verification.
 
-### 4. ZkCondition Circuit
+**Input Signals** (9 total):
+- **Private Inputs** (5):
+  - `recipientWalletPrivKey`: Recipient's wallet private key
+  - `randomness`: Note randomness
+  - `memo`: Optional memo
+  - `pathElements[16]`: Merkle path elements
+  - `pathIndices[16]`: Merkle path indices
+- **Public Inputs** (4):
+  - `recipientWalletPubKey`: Recipient's wallet public key
+  - `amount`: Withdrawal amount
+  - `tokenId`: Token identifier
+  - `commitment`: Note commitment for verification
 
-#### Inputs
-- Private:
-  - `amount`: Field element
-  - `conditionSecret`: Field element
-  - `conditionId`: Field element
-  - `conditionType`: Field element
-  - `conditionValue`: Field element
-  - `currentValue`: Field element
-- Public:
-  - `recipientAddress`: Field element
-  - `merkleRoot`: Field element
-  - `conditionCommitment`: Field element
+**Output Signals** (2):
+- `nullifier`: Nullifier to prevent double-spending
+- `merkleRoot`: Updated Merkle root
 
-#### Outputs
-- `isValid`: Boolean
-- `isConditionMet`: Boolean
+**Key Features**:
+- Merkle tree inclusion proof verification
+- Commitment reconstruction and validation
+- Wallet-bound identity verification
 
-#### Constraints
-- Condition type must be valid
-- Condition value must be valid
-- Commitment must be valid
-- Amount must be positive
+### Note Commitment Component
+
+**Purpose**: Computes commitments for shielded notes.
+
+**Input Signals** (5):
+- `amount`: Note amount
+- `cipherPayPubKey`: Owner's CipherPay public key
+- `randomness`: Note randomness
+- `tokenId`: Token identifier
+- `memo`: Optional memo
+
+**Output Signals** (1):
+- `commitment`: Note commitment hash
+
+### Nullifier Component
+
+**Purpose**: Generates nullifiers to prevent double-spending.
+
+**Input Signals** (4):
+- `ownerWalletPubKey`: Owner's wallet public key
+- `ownerWalletPrivKey`: Owner's wallet private key
+- `randomness`: Note randomness
+- `tokenId`: Token identifier
+
+**Output Signals** (1):
+- `nullifier`: Unique nullifier hash
 
 ## Cryptographic Primitives
 
-### 1. Poseidon Hash
-- Used for commitment generation
-- Used for nullifier generation
-- Used for Merkle tree operations
+### Identity Derivation
 
-### 2. Merkle Tree
-- 32-level Merkle tree
-- Poseidon hash for node hashing
-- Binary tree structure
+CipherPay identities are derived from wallet keys using Poseidon hash:
 
-### 3. Field Arithmetic
-- Field size: 21888242871839275222246405745257275088548364400416034343698204186575808495617
-- Prime field operations
-- Efficient field arithmetic
+```
+cipherPayPubKey = Poseidon(walletPubKey, walletPrivKey)
+```
 
-## Security Considerations
+This provides:
+- **Privacy**: Wallet keys are not directly exposed
+- **Uniqueness**: Each wallet has a unique CipherPay identity
+- **Verifiability**: Identity can be reconstructed from wallet keys
 
-### 1. Circuit Security
-- Constant-time operations
-- No timing side-channels
-- No memory side-channels
+### Note Commitment
 
-### 2. Cryptographic Security
-- Secure hash function
-- Secure commitment scheme
-- Secure nullifier scheme
+Note commitments use Poseidon hash over note components:
 
-### 3. Input Validation
-- All inputs are validated
-- No assumptions about input formats
-- Generic validation rules
+```
+commitment = Poseidon(amount, cipherPayPubKey, randomness, tokenId, memo)
+```
 
-## Performance Considerations
+### Nullifier Generation
 
-### 1. Circuit Size
-- Optimized for minimal constraints
-- Efficient field arithmetic
-- Minimal memory usage
+Nullifiers prevent double-spending using Poseidon hash:
 
-### 2. Proof Generation
-- Efficient proof generation
-- Minimal memory usage
-- Optimized for batch processing
+```
+nullifier = Poseidon(ownerWalletPubKey, ownerWalletPrivKey, randomness, tokenId)
+```
 
-### 3. Verification
-- Efficient verification
-- Minimal gas usage
-- Optimized for chain-specific requirements
+### Deposit Hash
+
+Deposit hashes bind owner identity to deposit using Poseidon hash:
+
+```
+depositHash = Poseidon(ownerCipherPayPubKey, amount, nonce)
+```
+
+## Security Properties
+
+### Privacy
+- **Transaction Privacy**: Amounts, recipients, and sender relationships are hidden
+- **Identity Privacy**: Wallet keys are never exposed on-chain
+- **Note Privacy**: Note contents are encrypted for recipients
+
+### Security
+- **Double-Spending Prevention**: Nullifiers prevent note reuse
+- **Merkle Tree Security**: Inclusion proofs verify note existence
+- **Amount Conservation**: Mathematical constraints prevent value creation
+
+### Auditability
+- **Selective Disclosure**: Optional audit trails for compliance
+- **Merkle Tree Verification**: Public verification of note inclusion
+- **Nullifier Tracking**: Public tracking of spent notes
+
+## Implementation Details
+
+### Merkle Tree
+- **Depth**: 16 levels (supports 2^16 notes)
+- **Hash Function**: Poseidon(2) for internal nodes
+- **Path Verification**: Standard Merkle inclusion proof
+
+### Field Arithmetic
+- **Prime Field**: BN254 scalar field
+- **Hash Function**: Poseidon for all cryptographic operations
+- **Circuit Constraints**: R1CS format for Groth16 proving system
+
+### Proving System
+- **Protocol**: Groth16
+- **Trusted Setup**: Power of Tau ceremony
+- **Proof Size**: ~2.5KB per proof
+- **Verification**: On-chain verification with constant gas cost
 
 ## Integration Guidelines
 
-### 1. Circuit Integration
-- Use standard interfaces
-- Follow chain-specific requirements
-- Implement proper error handling
+### On-Chain Integration
+1. Deploy verification contracts for each circuit
+2. Implement note commitment tree management
+3. Add nullifier tracking for double-spend prevention
+4. Handle encrypted note delivery for recipients
 
-### 2. Proof Generation
-- Use efficient proof generation
-- Optimize for chain-specific requirements
-- Handle errors properly
+### Client Integration
+1. Generate wallet key pairs
+2. Derive CipherPay identities
+3. Create and manage shielded notes
+4. Generate and submit ZK proofs
 
-### 3. Verification
-- Use chain-specific verification
-- Optimize for gas usage
-- Handle errors properly
-
-## Testing Guidelines
-
-### 1. Unit Testing
-- Test individual components
-- Test edge cases
-- Test error cases
-
-### 2. Integration Testing
-- Test end-to-end flow
-- Test chain-specific features
-- Test error scenarios
-
-### 3. Performance Testing
-- Test circuit size
-- Test proof generation
-- Test verification
-
-## Future Improvements
-
-### 1. Circuit Optimizations
-- Reduce circuit size
-- Improve proof generation
-- Optimize verification
-
-### 2. Feature Additions
-- Add new circuit types
-- Add new features
-- Add new optimizations
-
-### 3. Security Improvements
-- Add new security features
-- Improve existing security
-- Add new security checks 
+### Relayer Integration
+1. Accept proof submissions from users
+2. Verify proofs on-chain
+3. Handle gas fee payments
+4. Manage encrypted note delivery 
