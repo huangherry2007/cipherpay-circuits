@@ -167,4 +167,6 @@ template Withdraw() {
     nullifier <== nullifierGen.nullifier;
 }
 
-component main { public [recipientWalletPubKey, amount, tokenId, commitment] } = Withdraw();
+component main {
+    public [recipientWalletPubKey, amount, tokenId, commitment]
+} = Withdraw();
