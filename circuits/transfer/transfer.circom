@@ -32,7 +32,7 @@ template Transfer() {
     signal input out2Memo;
     
     // === Encrypted note for recipient === 
-    //signal input encryptedNote;  // Encrypted note for recipient (out1)
+    signal input encryptedNote;  // Encrypted note for recipient (out1)
     
     // === Public outputs === 
     signal output inCommitment;
@@ -210,8 +210,6 @@ template Transfer() {
     inAmount === out1Amount + out2Amount;
     out1TokenId === inTokenId;
     out2TokenId === inTokenId;
-
-    // DO NOT include encryptedNote as public signal, send it to the recipient off-chain (e.g. via relayer, p2p messaging, etc.)
 }
 
-component main = Transfer();
+component main {public [encryptedNote]} = Transfer();

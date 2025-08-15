@@ -10,7 +10,6 @@
     "test:coverage": "jest --coverage",
     "setup": "node scripts/setup.js",
     "generate-proof": "node scripts/generate-proof.js",
-    "generate-vk-ids": "node scripts/generate-vk-ids.js",
     "build:transfer": "circom circuits/transfer/transfer.circom --r1cs --wasm --sym -o build/transfer -l node_modules",
     "build:deposit": "circom circuits/deposit/deposit.circom --r1cs --wasm --sym -o build/deposit -l node_modules",
     "build:withdraw": "circom circuits/withdraw/withdraw.circom --r1cs --wasm --sym -o build/withdraw -l node_modules",
@@ -50,7 +49,7 @@
   "dependencies": {
     "circomlib": "^2.0.5",
     "circomlibjs": "0.1.7",
-    "snarkjs": "^0.7.0"
+    "snarkjs": "0.6.11"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",

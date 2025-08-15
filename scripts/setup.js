@@ -48,31 +48,21 @@ async function setupCircuits() {
             // Generate proving key using snarkjs
             console.log(`  Generating proving key for ${circuitName}...`);
 
-            // Use existing power of tau files or download them
-            const potPath = path.join(__dirname, '../powersOfTau/pot14_0000.ptau');
-            const potPhase2Path = path.join(__dirname, '../powersOfTau/pot14_final.ptau');
-            
-            // Check if power of tau files exist, if not, create the directory
-            const potDir = path.dirname(potPath);
-            if (!fs.existsSync(potDir)) {
-                fs.mkdirSync(potDir, { recursive: true });
-            }
-            
-            // If power of tau files don't exist, download them from trusted sources
+            // First, we need to generate a power of tau ceremony file
+            const potPath = path.join(buildPath, 'pot14_0000.ptau');
+            const potPhase2Path = path.join(buildPath, 'pot14_final.ptau');
             if (!fs.existsSync(potPath)) {
-                console.log(`  Downloading power of tau file for ${circuitName}...`);
-                // Use a smaller power of tau file for testing (12 instead of 14)
-                execSync(`npx snarkjs powersoftau new bn128 12 ${potPath}`, {
+                console.log(`  Creating power of tau file for ${circuitName}...`);
+                execSync(`npx snarkjs powersoftau new bn128 14 ${potPath}`, {
                     stdio: 'inherit',
-                    cwd: potDir
+                    cwd: buildPath
                 });
             }
-            
             if (!fs.existsSync(potPhase2Path)) {
                 console.log(`  Preparing phase2 for power of tau for ${circuitName}...`);
                 execSync(`npx snarkjs powersoftau prepare phase2 ${potPath} ${potPhase2Path}`, {
                     stdio: 'inherit',
-                    cwd: potDir
+                    cwd: buildPath
                 });
             }
 
