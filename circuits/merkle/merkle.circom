@@ -1,70 +1,57 @@
-pragma circom 2.0.0;
+pragma circom 2.1.4;
 
 include "circomlib/circuits/poseidon.circom";
 
-// Merkle proof verification circuit for CipherPay v2
-// Optimized for depth-16 trees with tree rotation strategy
-// Based on v2 whitepaper Appendix B specifications
-//
-// Security Properties:
-// - Merkle inclusion verification for shielded note commitments
-// - Binary selection with quadratic constraints for path verification
-// - Computes Merkle root from leaf and path for on-chain verification
-//
-// Note: Relayers maintain the full Merkle tree off-chain in JavaScript/TypeScript
-// This circuit only verifies inclusion proofs using paths provided by relayers
-
-// Core Merkle proof verificationtemplate (optimized for depth-16)
+// Generic Merkle inclusion proof (depth-parametric, bottom -> top)
+// Notes:
+// - `leaf`, `pathElements[]`, `pathIndices[]` are template inputs (not public
+//   unless exposed by a parent circuit's `main { public [...] }`).
+// - `pathIndices[i]` is constrained boolean (0/1).
 template MerkleProof(depth) {
-    // === Public inputs === 
-    signal input leaf;              // Leaf commitment to verify (254-bit)
-    
-    // === Private inputs === 
-    signal input pathElements[depth]; // Sibling hashes along the Merkle path (254-bit each)
-    signal input pathIndices[depth];  // Bit array indicating left/right sibling at each level (0 = left, 1 = right)
-    
-    // === Public outputs === 
-    signal output root;              // Computed Merkle root from path (254-bit)
-    
-    // === Internalsignal s for path computation === 
-    signal left[depth];          // Left child at each level
-    signal right[depth];         // Right child at each level
-    
-    // === Components === 
-    component poseidonHash[depth];  // Array of Poseidoncomponent s for Merkle path
-    
-    // Initialize Poseidoncomponent s for Merkle path
+    // Inputs
+    signal input leaf;                    // leaf being proven
+    signal input pathElements[depth];     // sibling at each level (bottom -> top)
+    signal input pathIndices[depth];      // 0 => (left=cur,right=sib), 1 => (left=sib,right=cur)
+
+    // Output
+    signal output root;                   // computed Merkle root
+
+    // Working signals
+    signal cur[depth + 1];
+    signal left[depth];
+    signal right[depth];
+    component H[depth];
+
+    // Start from the leaf
+    cur[0] <== leaf;
+
+    // Walk the path
     for (var i = 0; i < depth; i++) {
-        poseidonHash[i] = Poseidon(2);
+        // Enforce bit is boolean
+        pathIndices[i] * (pathIndices[i] - 1) === 0;
+
+        // Select children using quadratic selector
+        // if bit==0: left=cur[i],   right=pathElements[i]
+        // if bit==1: left=pathElem, right=cur[i]
+        left[i]  <== pathIndices[i] * (pathElements[i] - cur[i]) + cur[i];
+        right[i] <== pathIndices[i] * (cur[i] - pathElements[i]) + pathElements[i];
+
+        // Hash pair for next level
+        H[i] = Poseidon(2);
+        H[i].inputs[0] <== left[i];
+        H[i].inputs[1] <== right[i];
+        cur[i + 1] <== H[i].out;
     }
-    
-    // === Compute Merkle path using binary selection with quadratic constraints === 
-    var current = leaf;
-    for (var i = 0; i < depth; i++) {
-        // Use binary selection with quadratic constraints
-        // left = pathIndices[i] ? pathElements[i] : current
-        left[i] <== pathIndices[i] * (pathElements[i] - current) + current;
-        
-        // right = pathIndices[i] ? current : pathElements[i]
-        right[i] <== pathIndices[i] * (current - pathElements[i]) + pathElements[i];
-        
-        // Hash the pair using Poseidon
-        poseidonHash[i].inputs[0] <== left[i];
-        poseidonHash[i].inputs[1] <== right[i];
-        current = poseidonHash[i].out;
-    }
-    
-    // === Output the computed root === 
-    root <== current;
+
+    // Root at the top
+    root <== cur[depth];
 }
 
-// Note: This is a reusablecomponent , not meant to be compiled standalone
-//
-// Usage in transfer/withdraw circuits:
-//component merkleProof = MerkleProof(16);
-// merkleProof.leaf <== computedCommitment;
+// Example usage inside another circuit:
+// component mp = MerkleProof(16);
+// mp.leaf <== someCommitment;
 // for (var i = 0; i < 16; i++) {
-    //     merkleProof.pathElements[i] <== inPathElements[i];
-    //     merkleProof.pathIndices[i] <== inPathIndices[i];
+//     mp.pathElements[i] <== pathElems[i];
+//     mp.pathIndices[i]  <== pathBits[i];
 // }
-// merkleRoot <== merkleProof.root;
+// someRootSignal <== mp.root;

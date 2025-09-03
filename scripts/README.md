@@ -15,9 +15,11 @@ node scripts/setup.js
 **What it does:**
 - Compiles all core circuits to R1CS format
 - Generates WebAssembly files for proof generation
+- Creates shared ptau file for all circuits (if needed)
 - Creates proving keys (.zkey files) using Groth16
 - Exports verification keys for on-chain verification
 - Copies verification keys to expected test locations
+- Automatically generates ptau files if needed
 
 **Generated files per circuit:**
 - `{circuit}.r1cs` - R1CS constraint system
@@ -26,12 +28,43 @@ node scripts/setup.js
 - `verification_key.json` - Verification key
 - `verifier-{circuit}.json` - Renamed verification key for tests
 
+**Shared files:**
+- `pot14_final.ptau` - Shared power of tau file for all circuits
+
 **Circuits built:**
 - `transfer` - Shielded transfers with encrypted note delivery (19 signals)
-- `deposit` - Public to shielded conversion with privacy binding (8 signals)
+- `deposit` - Public to shielded conversion with Merkle tree integration (46 signals)
 - `withdraw` - Shielded to public conversion with identity verification (9 signals)
 
-### 2. `generate-proof.js` - Proof Generation
+### 2. `generate-zkey-vk.js` - ZKey and Verification Key Generation
+Dedicated script for generating zkey files and verification keys with advanced options.
+
+**Usage:**
+```bash
+# Generate for all circuits
+node scripts/generate-zkey-vk.js
+
+# Generate for specific circuit
+node scripts/generate-zkey-vk.js deposit
+
+# Generate with custom options
+node scripts/generate-zkey-vk.js deposit --ptau-size 16 --no-auto-ptau
+```
+
+**Options:**
+- `--no-auto-ptau` - Don't auto-generate ptau files
+- `--ptau-size <size>` - Set ptau file size (default: 14)
+- `--stop-on-error` - Stop processing if any circuit fails
+
+**What it does:**
+- Checks for existing R1CS files
+- Generates or finds ptau files
+- Creates zkey files using Groth16 setup
+- Exports verification keys
+- Creates test verification key copies
+- Displays verification key information
+
+### 3. `generate-proof.js` - Proof Generation
 Generates zero-knowledge proofs for any core circuit.
 
 **Usage:**
@@ -49,11 +82,67 @@ node scripts/generate-proof.js deposit
 **Available circuits:**
 - `transfer` - Shielded transfers between users
 - `withdraw` - Withdrawals from shielded pool
-- `deposit` - Deposits into shielded pool
+- `deposit` - Deposits into shielded pool with Merkle tree integration
 
 **Generated files:**
 - `proof.json` - Zero-knowledge proof
 - `public_signals.json` - Public signals for verification
+
+### 4. `convert-vk-to-binary.js` - Verification Key Conversion
+Converts JSON verification keys to binary format for Solana on-chain verification.
+
+**Usage:**
+```bash
+node scripts/convert-vk-to-binary.js --batch
+```
+
+**What it does:**
+- Reads JSON verification keys from `build/{circuit}/verification_key.json`
+- Converts BN254 curve points to binary format
+- Outputs binary files to `../cipherpay-anchor/src/zk_verifier/{circuit}_vk.bin`
+- Supports groth16-solana library format
+
+### 5. `generate-binary-proofs.js` - Binary Proof Generation
+Generates binary proof files for Solana integration testing.
+
+**Usage:**
+```bash
+# Deposit with built-in example inputs
+node scripts/generate-binary-proofs.js
+
+# Transfer / Withdraw with built-in example inputs
+node scripts/generate-binary-proofs.js transfer
+node scripts/generate-binary-proofs.js withdraw
+
+# Use your own input JSON (must match the circuit’s signals)
+node scripts/generate-binary-proofs.js deposit -i my-deposit-input.json
+
+# Generate all three in one go
+node scripts/generate-binary-proofs.js --all
+```
+
+**What it does:**
+- Generates a deposit proof using example inputs
+- Converts proof and public signals to binary format
+- Saves binary files to `../cipherpay-anchor/proofs/`
+- Creates `deposit_proof.bin` (512 bytes) and `deposit_public_inputs.bin` (128 bytes)
+
+**Generated files:**
+- `deposit_proof.bin` - Binary Groth16 proof for on-chain verification
+- `deposit_public_inputs.bin` - Binary public signals (4 outputs × 32 bytes)
+
+### 6. `verify-proof.js` - Proof Verification
+
+**Usage:**
+```bash
+node scripts/convert-vk-to-binary.js
+```
+
+**What it does:**
+- Reads JSON verification keys from `build/{circuit}/verification_key.json`
+- Converts BN254 curve points to binary format
+- Outputs binary files to `../cipherpay-anchor/src/zk_verifier/{circuit}_vk.bin`
+- Supports groth16-solana library format
 
 ## Circuit Input Formats
 
@@ -89,20 +178,29 @@ node scripts/generate-proof.js deposit
 }
 ```
 
-### Deposit Circuit (8 signals)
+### Deposit Circuit (46 signals)
 ```javascript
 {
-    // Private inputs (5 signals)
+    // Private inputs (39 signals)
     ownerWalletPubKey: 1234567890,
     ownerWalletPrivKey: 1111111111,
     randomness: 9876543210,
     tokenId: 1,
     memo: 0,
+    inPathElements: Array(16).fill(0), // Merkle path elements
+    inPathIndices: Array(16).fill(0),  // Merkle path indices
+    nextLeafIndex: 0,                   // Current next leaf index
 
     // Public inputs (3 signals)
     nonce: 3333333333,
     amount: 100,
     depositHash: 7777777777 // Poseidon(ownerCipherPayPubKey, amount, nonce)
+    
+    // Public outputs (4 signals) - automatically generated
+    // newCommitment: Shielded note commitment
+    // ownerCipherPayPubKey: Derived CipherPay identity  
+    // newMerkleRoot: New merkle root after adding commitment
+    // newNextLeafIndex: Next leaf index after insertion
 }
 ```
 
@@ -182,6 +280,30 @@ node scripts/setup.js
 npm test
 ```
 
+### 4. Solana Integration
+```bash
+# Convert verification keys to binary format
+node scripts/convert-vk-to-binary.js
+
+# Generate binary proof files for testing
+node scripts/generate-binary-proofs.js
+
+# Build anchor program with real-crypto feature
+cd ../cipherpay-anchor && anchor build -- --features real-crypto
+```
+
+### 5. Advanced ZKey Generation
+```bash
+# Generate zkey and vk for specific circuit with custom options
+node scripts/generate-zkey-vk.js deposit --ptau-size 16
+
+# Generate for all circuits with error handling
+node scripts/generate-zkey-vk.js --stop-on-error
+
+# Use existing ptau files
+node scripts/generate-zkey-vk.js transfer --no-auto-ptau
+```
+
 ## Circuit Features
 
 ### Transfer Circuit
@@ -194,12 +316,14 @@ npm test
   - Merkle tree inclusion proof verification
 
 ### Deposit Circuit
-- **Purpose**: Convert public funds to shielded notes
-- **Signals**: 8 total (5 private + 3 public)
+- **Purpose**: Convert public funds to shielded notes with Merkle tree integration
+- **Signals**: 46 total (39 private + 3 public + 4 outputs)
 - **Key Features**:
   - Privacy-enhanced deposit hash using `ownerCipherPayPubKey`
   - Unique nonce prevents hash collisions
   - Wallet-bound identity derivation
+  - Merkle tree path verification and root update
+  - Leaf index tracking for tree insertion
 
 ### Withdraw Circuit
 - **Purpose**: Convert shielded notes to public funds
@@ -231,6 +355,13 @@ nullifier = Poseidon(ownerWalletPubKey, ownerWalletPrivKey, randomness, tokenId)
 depositHash = Poseidon(ownerCipherPayPubKey, amount, nonce)
 ```
 
+### Merkle Tree Operations
+```javascript
+// For deposit circuit
+newMerkleRoot = computeMerkleRoot(newCommitment, inPathElements, inPathIndices)
+newNextLeafIndex = nextLeafIndex + 1
+```
+
 ## Security Properties
 
 ### Privacy
@@ -252,7 +383,7 @@ depositHash = Poseidon(ownerCipherPayPubKey, amount, nonce)
 
 ### Circuit Complexity
 - **Transfer**: ~215 constraints
-- **Deposit**: ~214 constraints
+- **Deposit**: ~4,694 constraints (with Merkle tree)
 - **Withdraw**: ~215 constraints
 
 ### Proof Generation
@@ -294,12 +425,22 @@ depositHash = Poseidon(ownerCipherPayPubKey, amount, nonce)
    node --max-old-space-size=4096 scripts/setup.js
    ```
 
+6. **"InvalidZkProof" in Solana tests**
+   ```bash
+   # Regenerate verification keys
+   node scripts/setup.js
+   node scripts/convert-vk-to-binary.js
+   # Rebuild anchor program
+   anchor build -- --features real-crypto
+   ```
+
 ### Build Process
 1. **Compilation**: Circuits are compiled to R1CS format
 2. **WASM Generation**: JavaScript witness calculators are created
 3. **Proving Keys**: Groth16 proving keys are generated (time-intensive)
 4. **Verification Keys**: Public verification keys are exported
-5. **File Distribution**: Keys are copied to test locations
+5. **Binary Conversion**: JSON keys converted to binary for Solana
+6. **File Distribution**: Keys are copied to test locations
 
 ## Dependencies
 

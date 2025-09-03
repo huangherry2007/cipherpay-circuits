@@ -2,6 +2,7 @@ const snarkjs = require('snarkjs');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { generateZkeyAndVk } = require('./generate-zkey-vk.js');
 
 // CipherPay Circuit Setup Script
 // Builds circuits with updated naming conventions
@@ -19,6 +20,15 @@ async function setupCircuits() {
     const buildDir = path.join(__dirname, '../build');
     if (!fs.existsSync(buildDir)) {
         fs.mkdirSync(buildDir, { recursive: true });
+    }
+
+    // Create shared ptau file first (if needed)
+    const sharedPtauPath = path.join(buildDir, 'pot14_final.ptau');
+    if (!fs.existsSync(sharedPtauPath)) {
+        console.log('🔧 Creating shared ptau file for all circuits...');
+        const { createPtauFile } = require('./generate-zkey-vk.js');
+        await createPtauFile(buildDir, 14);
+        console.log('✅ Shared ptau file created');
     }
 
     for (const circuitName of circuits) {
@@ -45,48 +55,14 @@ async function setupCircuits() {
 
             console.log(`  ✅ ${circuitName} compiled successfully`);
 
-            // Generate proving key using snarkjs
-            console.log(`  Generating proving key for ${circuitName}...`);
-
-            // First, we need to generate a power of tau ceremony file
-            const potPath = path.join(buildPath, 'pot14_0000.ptau');
-            const potPhase2Path = path.join(buildPath, 'pot14_final.ptau');
-            if (!fs.existsSync(potPath)) {
-                console.log(`  Creating power of tau file for ${circuitName}...`);
-                execSync(`npx snarkjs powersoftau new bn128 14 ${potPath}`, {
-                    stdio: 'inherit',
-                    cwd: buildPath
-                });
-            }
-            if (!fs.existsSync(potPhase2Path)) {
-                console.log(`  Preparing phase2 for power of tau for ${circuitName}...`);
-                execSync(`npx snarkjs powersoftau prepare phase2 ${potPath} ${potPhase2Path}`, {
-                    stdio: 'inherit',
-                    cwd: buildPath
-                });
-            }
-
-            // Generate the proving key
-            const zkeyPath = path.join(buildPath, `${circuitName}.zkey`);
-            execSync(`npx snarkjs groth16 setup ${r1csPath} ${potPhase2Path} ${zkeyPath}`, {
-                stdio: 'inherit',
-                cwd: buildPath
+            // Generate zkey and verification key using the new script
+            console.log(`  Generating zkey and verification key for ${circuitName}...`);
+            await generateZkeyAndVk(circuitName, {
+                autoGeneratePtau: true,
+                ptauSize: 14
             });
 
-            console.log(`  ✅ Proving key generated for ${circuitName}`);
-
-            // Export verification key
-            console.log(`  Exporting verification key for ${circuitName}...`);
-            execSync(`npx snarkjs zkey export verificationkey ${zkeyPath} ${path.join(buildPath, 'verification_key.json')}`, {
-                stdio: 'inherit',
-                cwd: buildPath
-            });
-            
-            // Also create the expected test file names
-            const testVkPath = path.join(buildPath, `verifier-${circuitName}.json`);
-            fs.copyFileSync(path.join(buildPath, 'verification_key.json'), testVkPath);
-
-            console.log(`  ✅ Verification key exported for ${circuitName}`);
+            console.log(`  ✅ ${circuitName} zkey and vk generated successfully`);
 
         } catch (error) {
             console.error(`  ❌ Error building ${circuitName}:`, error.message);

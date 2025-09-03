@@ -1,215 +1,194 @@
 pragma circom 2.1.4;
 
 include "circomlib/circuits/poseidon.circom";
-include "../nullifier/nullifier.circom";
-include "../note_commitment/note_commitment.circom";
+include "circomlib/circuits/bitify.circom";      // Num2Bits
+include "../merkle/merkle.circom";               // MerkleProof(depth)
+include "../nullifier/nullifier.circom";         // Nullifier*, incl. FromCipherKey
+include "../note_commitment/note_commitment.circom"; // NoteCommitment, FromWallet
 
-// CipherPay Transfer circuit with wallet-bound recipient identity
-template Transfer() {
-    // === Private input note (5-field note preimage) === 
+// Transfer with 1 input note, 2 output notes, and append-2 Merkle updates
+// Public signals (Circom 2): outputs first, then [encNote1Hash, encNote2Hash]
+// [ outCommitment1, outCommitment2, nullifier, merkleRoot,
+//   newMerkleRoot1, newMerkleRoot2, newNextLeafIndex, encNote1Hash, encNote2Hash ]
+template Transfer(depth) {
+    // === Private input note (5-field note preimage) ===
     signal input inAmount;
     signal input inSenderWalletPubKey;
     signal input inSenderWalletPrivKey;
     signal input inRandomness;
     signal input inTokenId;
     signal input inMemo;
-    
-    signal input inPathElements[16];
-    signal input inPathIndices[16];
-    
-    // === Output note 1 (for recipient) === 
+
+    // Membership proof for the input commitment
+    signal input inPathElements[depth];     // siblings bottom -> top
+    signal input inPathIndices[depth];      // 0 => (left=cur, right=sib), 1 => (left=sib, right=cur)
+
+    // === Output note 1 (recipient) ===
     signal input out1Amount;
-    signal input out1RecipientCipherPayPubKey;  // Recipient provides this directly
+    signal input out1RecipientCipherPayPubKey;
     signal input out1Randomness;
     signal input out1TokenId;
     signal input out1Memo;
-    
-    // === Output note 2 (change note) === 
+
+    // === Output note 2 (flexible recipient) ===
     signal input out2Amount;
-    signal input out2SenderCipherPayPubKey;  // Sender's change note
+    signal input out2RecipientCipherPayPubKey;
     signal input out2Randomness;
     signal input out2TokenId;
     signal input out2Memo;
-    
-    // === Encrypted note for recipient === 
-    signal input encryptedNote;  // Encrypted note for recipient (out1)
-    
-    // === Public outputs === 
-    signal output inCommitment;
+
+    // === Append two new leaves at consecutive positions ===
+    signal input nextLeafIndex;             // index for outCommitment1 (private)
+    signal input out1PathElements[depth];   // insertion siblings for index = nextLeafIndex
+    signal input out2PathElements[depth];   // insertion siblings for index = nextLeafIndex + 1 (pre-insertion tree)
+
+    // === Public inputs (bind encrypted payloads to outputs/recipients) ===
+    signal input encNote1Hash;              // Poseidon(outCommitment1, out1RecipientCipherPayPubKey)
+    signal input encNote2Hash;              // Poseidon(outCommitment2, out2RecipientCipherPayPubKey)
+
+    // === Public outputs ===
     signal output outCommitment1;
     signal output outCommitment2;
     signal output nullifier;
-    signal output merkleRoot;
-    
-    // === Step 1: Derive CipherPay identities === 
-    component id1 = Poseidon(2);
-    id1.inputs[0] <== inSenderWalletPubKey;
-    id1.inputs[1] <== inSenderWalletPrivKey;
-    signal inSenderCipherPayPubKey <== id1.out;
-    
-    // For output notes, recipients provide their CipherPay pubkeys directly
-    // out1 is for the recipient, out2 is for sender's change
-    signal out1CipherPayPubKey <== out1RecipientCipherPayPubKey;
-    signal out2CipherPayPubKey <== out2SenderCipherPayPubKey;
-    
-    // === Step 2: Compute input commitment === 
-    component inputNote = NoteCommitment();
-    inputNote.amount <== inAmount;
-    inputNote.cipherPayPubKey <== inSenderCipherPayPubKey;
-    inputNote.randomness <== inRandomness;
-    inputNote.tokenId <== inTokenId;
-    inputNote.memo <== inMemo;
-    inCommitment <== inputNote.commitment;
-    
-    // === Step 3: Merkle Path Verification === 
-    // Use a simpler approach without reassigningsignal s
-    component merkleHasher0 = Poseidon(2);
-    component merkleHasher1 = Poseidon(2);
-    component merkleHasher2 = Poseidon(2);
-    component merkleHasher3 = Poseidon(2);
-    component merkleHasher4 = Poseidon(2);
-    component merkleHasher5 = Poseidon(2);
-    component merkleHasher6 = Poseidon(2);
-    component merkleHasher7 = Poseidon(2);
-    component merkleHasher8 = Poseidon(2);
-    component merkleHasher9 = Poseidon(2);
-    component merkleHasher10 = Poseidon(2);
-    component merkleHasher11 = Poseidon(2);
-    component merkleHasher12 = Poseidon(2);
-    component merkleHasher13 = Poseidon(2);
-    component merkleHasher14 = Poseidon(2);
-    component merkleHasher15 = Poseidon(2);
-    
-    // Level 0
-    var left0 = inPathIndices[0] * (inPathElements[0] - inCommitment) + inCommitment;
-    var right0 = inPathIndices[0] * (inCommitment - inPathElements[0]) + inPathElements[0];
-    merkleHasher0.inputs[0] <== left0;
-    merkleHasher0.inputs[1] <== right0;
-    
-    // Level 1
-    var left1 = inPathIndices[1] * (inPathElements[1] - merkleHasher0.out) + merkleHasher0.out;
-    var right1 = inPathIndices[1] * (merkleHasher0.out - inPathElements[1]) + inPathElements[1];
-    merkleHasher1.inputs[0] <== left1;
-    merkleHasher1.inputs[1] <== right1;
-    
-    // Level 2
-    var left2 = inPathIndices[2] * (inPathElements[2] - merkleHasher1.out) + merkleHasher1.out;
-    var right2 = inPathIndices[2] * (merkleHasher1.out - inPathElements[2]) + inPathElements[2];
-    merkleHasher2.inputs[0] <== left2;
-    merkleHasher2.inputs[1] <== right2;
-    
-    // Level 3
-    var left3 = inPathIndices[3] * (inPathElements[3] - merkleHasher2.out) + merkleHasher2.out;
-    var right3 = inPathIndices[3] * (merkleHasher2.out - inPathElements[3]) + inPathElements[3];
-    merkleHasher3.inputs[0] <== left3;
-    merkleHasher3.inputs[1] <== right3;
-    
-    // Level 4
-    var left4 = inPathIndices[4] * (inPathElements[4] - merkleHasher3.out) + merkleHasher3.out;
-    var right4 = inPathIndices[4] * (merkleHasher3.out - inPathElements[4]) + inPathElements[4];
-    merkleHasher4.inputs[0] <== left4;
-    merkleHasher4.inputs[1] <== right4;
-    
-    // Level 5
-    var left5 = inPathIndices[5] * (inPathElements[5] - merkleHasher4.out) + merkleHasher4.out;
-    var right5 = inPathIndices[5] * (merkleHasher4.out - inPathElements[5]) + inPathElements[5];
-    merkleHasher5.inputs[0] <== left5;
-    merkleHasher5.inputs[1] <== right5;
-    
-    // Level 6
-    var left6 = inPathIndices[6] * (inPathElements[6] - merkleHasher5.out) + merkleHasher5.out;
-    var right6 = inPathIndices[6] * (merkleHasher5.out - inPathElements[6]) + inPathElements[6];
-    merkleHasher6.inputs[0] <== left6;
-    merkleHasher6.inputs[1] <== right6;
-    
-    // Level 7
-    var left7 = inPathIndices[7] * (inPathElements[7] - merkleHasher6.out) + merkleHasher6.out;
-    var right7 = inPathIndices[7] * (merkleHasher6.out - inPathElements[7]) + inPathElements[7];
-    merkleHasher7.inputs[0] <== left7;
-    merkleHasher7.inputs[1] <== right7;
-    
-    // Level 8
-    var left8 = inPathIndices[8] * (inPathElements[8] - merkleHasher7.out) + merkleHasher7.out;
-    var right8 = inPathIndices[8] * (merkleHasher7.out - inPathElements[8]) + inPathElements[8];
-    merkleHasher8.inputs[0] <== left8;
-    merkleHasher8.inputs[1] <== right8;
-    
-    // Level 9
-    var left9 = inPathIndices[9] * (inPathElements[9] - merkleHasher8.out) + merkleHasher8.out;
-    var right9 = inPathIndices[9] * (merkleHasher8.out - inPathElements[9]) + inPathElements[9];
-    merkleHasher9.inputs[0] <== left9;
-    merkleHasher9.inputs[1] <== right9;
-    
-    // Level 10
-    var left10 = inPathIndices[10] * (inPathElements[10] - merkleHasher9.out) + merkleHasher9.out;
-    var right10 = inPathIndices[10] * (merkleHasher9.out - inPathElements[10]) + inPathElements[10];
-    merkleHasher10.inputs[0] <== left10;
-    merkleHasher10.inputs[1] <== right10;
-    
-    // Level 11
-    var left11 = inPathIndices[11] * (inPathElements[11] - merkleHasher10.out) + merkleHasher10.out;
-    var right11 = inPathIndices[11] * (merkleHasher10.out - inPathElements[11]) + inPathElements[11];
-    merkleHasher11.inputs[0] <== left11;
-    merkleHasher11.inputs[1] <== right11;
-    
-    // Level 12
-    var left12 = inPathIndices[12] * (inPathElements[12] - merkleHasher11.out) + merkleHasher11.out;
-    var right12 = inPathIndices[12] * (merkleHasher11.out - inPathElements[12]) + inPathElements[12];
-    merkleHasher12.inputs[0] <== left12;
-    merkleHasher12.inputs[1] <== right12;
-    
-    // Level 13
-    var left13 = inPathIndices[13] * (inPathElements[13] - merkleHasher12.out) + merkleHasher12.out;
-    var right13 = inPathIndices[13] * (merkleHasher12.out - inPathElements[13]) + inPathElements[13];
-    merkleHasher13.inputs[0] <== left13;
-    merkleHasher13.inputs[1] <== right13;
-    
-    // Level 14
-    var left14 = inPathIndices[14] * (inPathElements[14] - merkleHasher13.out) + merkleHasher13.out;
-    var right14 = inPathIndices[14] * (merkleHasher13.out - inPathElements[14]) + inPathElements[14];
-    merkleHasher14.inputs[0] <== left14;
-    merkleHasher14.inputs[1] <== right14;
-    
-    // Level 15
-    var left15 = inPathIndices[15] * (inPathElements[15] - merkleHasher14.out) + merkleHasher14.out;
-    var right15 = inPathIndices[15] * (merkleHasher14.out - inPathElements[15]) + inPathElements[15];
-    merkleHasher15.inputs[0] <== left15;
-    merkleHasher15.inputs[1] <== right15;
-    
-    merkleRoot <== merkleHasher15.out;
-    
-    // === Step 4: Output commitment 1 === 
-    component outNote1 = NoteCommitment();
-    outNote1.amount <== out1Amount;
-    outNote1.cipherPayPubKey <== out1CipherPayPubKey;
-    outNote1.randomness <== out1Randomness;
-    outNote1.tokenId <== out1TokenId;
-    outNote1.memo <== out1Memo;
-    outCommitment1 <== outNote1.commitment;
-    
-    // === Step 5: Output commitment 2 === 
-    component outNote2 = NoteCommitment();
-    outNote2.amount <== out2Amount;
-    outNote2.cipherPayPubKey <== out2CipherPayPubKey;
-    outNote2.randomness <== out2Randomness;
-    outNote2.tokenId <== out2TokenId;
-    outNote2.memo <== out2Memo;
-    outCommitment2 <== outNote2.commitment;
-    
-    // === Step 6: Nullifier === 
-    component nullifierGen = Nullifier();
-    nullifierGen.ownerWalletPubKey <== inSenderWalletPubKey;
-    nullifierGen.ownerWalletPrivKey <== inSenderWalletPrivKey;
-    nullifierGen.randomness <== inRandomness;
-    nullifierGen.tokenId <== inTokenId;
-    nullifier <== nullifierGen.nullifier;
-    
+    signal output merkleRoot;               // root BEFORE insertions
+    signal output newMerkleRoot1;           // AFTER inserting outCommitment1 at nextLeafIndex
+    signal output newMerkleRoot2;           // AFTER inserting outCommitment2 at nextLeafIndex+1
+    signal output newNextLeafIndex;         // == nextLeafIndex + 2
 
-    
-    // === Step 7: Conservation Checks === 
-    inAmount === out1Amount + out2Amount;
+    // -- Step 1: input note commitment (derive sender CipherPay pubkey internally) --
+    component inNote = NoteCommitmentFromWallet();
+    inNote.amount        <== inAmount;
+    inNote.walletPubKey  <== inSenderWalletPubKey;
+    inNote.walletPrivKey <== inSenderWalletPrivKey;
+    inNote.randomness    <== inRandomness;
+    inNote.tokenId       <== inTokenId;
+    inNote.memo          <== inMemo;
+
+    signal inCommitment;
+    inCommitment <== inNote.commitment;
+
+    // -- Step 2: Merkle inclusion proof for the input commitment (yields current merkleRoot) --
+    component mpIn = MerkleProof(depth);
+    mpIn.leaf <== inCommitment;
+    for (var i = 0; i < depth; i++) {
+        mpIn.pathElements[i] <== inPathElements[i];
+        mpIn.pathIndices[i]  <== inPathIndices[i];
+    }
+    merkleRoot <== mpIn.root;
+
+    // -- Step 3: output notes (both can target arbitrary recipients) --
+    component outNote1 = NoteCommitment();
+    outNote1.amount          <== out1Amount;
+    outNote1.cipherPayPubKey <== out1RecipientCipherPayPubKey;
+    outNote1.randomness      <== out1Randomness;
+    outNote1.tokenId         <== out1TokenId;
+    outNote1.memo            <== out1Memo;
+    outCommitment1           <== outNote1.commitment;
+
+    component outNote2 = NoteCommitment();
+    outNote2.amount          <== out2Amount;
+    outNote2.cipherPayPubKey <== out2RecipientCipherPayPubKey;
+    outNote2.randomness      <== out2Randomness;
+    outNote2.tokenId         <== out2TokenId;
+    outNote2.memo            <== out2Memo;
+    outCommitment2           <== outNote2.commitment;
+
+    // -- Step 4: nullifier (prevents double-spend of input note) --
+    component nul = NullifierFromCipherKey();
+    nul.cipherPayPubKey <== inNote.derivedCipherPayPubKey;  // reuse derived CPPK
+    nul.randomness      <== inRandomness;
+    nul.tokenId         <== inTokenId;
+    nullifier           <== nul.nullifier;
+
+    // -- Step 5: conservation & token checks --
+    inAmount    === out1Amount + out2Amount;
     out1TokenId === inTokenId;
     out2TokenId === inTokenId;
+
+    // -- Step 6: bind ciphertext tags to outputs & recipients --
+    component bind1 = Poseidon(2);
+    bind1.inputs[0] <== outCommitment1;
+    bind1.inputs[1] <== out1RecipientCipherPayPubKey;
+    encNote1Hash === bind1.out;
+
+    component bind2 = Poseidon(2);
+    bind2.inputs[0] <== outCommitment2;
+    bind2.inputs[1] <== out2RecipientCipherPayPubKey;
+    encNote2Hash === bind2.out;
+
+    // -- Step 7: Insertion #1 (append outCommitment1 at index = nextLeafIndex) --
+    component bits1 = Num2Bits(depth);
+    bits1.in <== nextLeafIndex;             // also enforces nextLeafIndex < 2^depth
+
+    signal cur1[depth + 1];
+    cur1[0] <== outCommitment1;
+
+    signal left1[depth];
+    signal right1[depth];
+    component H1[depth];
+
+    for (var j = 0; j < depth; j++) {
+        left1[j]  <== bits1.out[j] * (out1PathElements[j] - cur1[j]) + cur1[j];
+        right1[j] <== bits1.out[j] * (cur1[j] - out1PathElements[j]) + out1PathElements[j];
+
+        H1[j] = Poseidon(2);
+        H1[j].inputs[0] <== left1[j];
+        H1[j].inputs[1] <== right1[j];
+        cur1[j + 1] <== H1[j].out;
+    }
+    newMerkleRoot1 <== cur1[depth];
+
+    // -- Step 8: Insertion #2 (append outCommitment2 at index = nextLeafIndex + 1) --
+    signal nextIdx1;
+    nextIdx1 <== nextLeafIndex + 1;
+
+    component bits2 = Num2Bits(depth);
+    bits2.in <== nextIdx1;                  // enforces nextLeafIndex + 1 < 2^depth
+
+    signal cur2[depth + 1];
+    cur2[0] <== outCommitment2;
+
+    signal left2[depth];
+    signal right2[depth];
+    component H2[depth];
+
+    // Parity of nextLeafIndex (LSB from insertion #1 bits)
+    signal b1;
+    b1 <== bits1.out[0]; // boolean
+
+    // Safe level-0 sibling selection via assignments (quadratic only):
+    // sib0 = outCommitment1 + b1 * (out2PathElements[0] - outCommitment1)
+    signal t0;
+    t0   <== out2PathElements[0] - outCommitment1;
+    signal sib0;
+    sib0 <== outCommitment1 + b1 * t0;
+
+    // Level 0 using sib0 and bits2
+    left2[0]  <== bits2.out[0] * (sib0 - cur2[0]) + cur2[0];
+    right2[0] <== bits2.out[0] * (cur2[0] - sib0) + sib0;
+
+    H2[0] = Poseidon(2);
+    H2[0].inputs[0] <== left2[0];
+    H2[0].inputs[1] <== right2[0];
+    cur2[1] <== H2[0].out;
+
+    // Levels 1..depth-1 use provided pre-insertion siblings
+    for (var k = 1; k < depth; k++) {
+        left2[k]  <== bits2.out[k] * (out2PathElements[k] - cur2[k]) + cur2[k];
+        right2[k] <== bits2.out[k] * (cur2[k] - out2PathElements[k]) + out2PathElements[k];
+
+        H2[k] = Poseidon(2);
+        H2[k].inputs[0] <== left2[k];
+        H2[k].inputs[1] <== right2[k];
+        cur2[k + 1] <== H2[k].out;
+    }
+    newMerkleRoot2 <== cur2[depth];
+
+    // final next index after two insertions
+    newNextLeafIndex <== nextLeafIndex + 2;
 }
 
-component main {public [encryptedNote]} = Transfer();
+// Outputs first, then public inputs:
+// [ outCommitment1, outCommitment2, nullifier, merkleRoot,
+//   newMerkleRoot1, newMerkleRoot2, newNextLeafIndex, encNote1Hash, encNote2Hash ]
+component main { public [encNote1Hash, encNote2Hash] } = Transfer(16);

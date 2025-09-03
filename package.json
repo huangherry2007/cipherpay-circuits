@@ -18,6 +18,7 @@
     "build:core": "npm run build:transfer && npm run build:deposit && npm run build:withdraw",
     "build:components": "npm run build:note-commitment && npm run build:nullifier",
     "build:all": "npm run build:core && npm run build:components",
+    "convert-vk": "node scripts/convert-vk-to-binary.js",
     "clean": "rm -rf build/",
     "clean:all": "rm -rf build/ node_modules/ package-lock.json"
   },
@@ -47,6 +48,7 @@
     "npm": ">=8.0.0"
   },
   "dependencies": {
+    "circom": "^0.5.46",
     "circomlib": "^2.0.5",
     "circomlibjs": "0.1.7",
     "snarkjs": "0.6.11"
@@ -139,4 +141,4 @@
       "on_chain": "Constant gas cost regardless of circuit complexity"
     }
   }
-} 
+}

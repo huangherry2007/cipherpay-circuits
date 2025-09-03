@@ -72,8 +72,7 @@ async function main() {
     const availableCircuits = [
         'transfer',
         'withdraw',
-        'deposit',
-        'nullifier'
+        'deposit'
     ];
 
     if (!availableCircuits.includes(circuitName)) {

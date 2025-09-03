@@ -1,10 +1,10 @@
 # CipherPay Circuits
 
-Zero-knowledge proof circuits for privacy-preserving payments with wallet-bound identities and encrypted note delivery.
+Zero-knowledge proof circuits for privacy-preserving payments with wallet-bound identities, encrypted note delivery, and Merkle tree integration.
 
 ## Overview
 
-CipherPay circuits implement privacy-preserving payment functionality using Circom 2.1.4 and the Groth16 proving system. The circuits provide shielded transfers with wallet-bound identities and encrypted note delivery for enhanced privacy.
+CipherPay circuits implement privacy-preserving payment functionality using Circom 2.1.4 and the Groth16 proving system. The circuits provide shielded transfers with wallet-bound identities, encrypted note delivery, and Merkle tree integration for enhanced privacy and security.
 
 ## Core Circuits
 
@@ -18,12 +18,14 @@ CipherPay circuits implement privacy-preserving payment functionality using Circ
   - Merkle tree inclusion proof verification
 
 ### Deposit Circuit (`deposit.circom`)
-**Purpose**: Convert public funds to shielded notes with privacy-enhanced binding
-- **Signals**: 8 total (5 private + 3 public)
+**Purpose**: Convert public funds to shielded notes with Merkle tree integration
+- **Signals**: 46 total (39 private + 3 public + 4 outputs)
 - **Key Features**:
   - Privacy-enhanced deposit hash using `ownerCipherPayPubKey`
   - Unique nonce prevents hash collisions
   - Wallet-bound identity derivation
+  - Merkle tree path verification and root update
+  - Leaf index tracking for tree insertion
 
 ### Withdraw Circuit (`withdraw.circom`)
 **Purpose**: Convert shielded notes to public funds with identity verification
@@ -67,6 +69,13 @@ nullifier = Poseidon(ownerWalletPubKey, ownerWalletPrivKey, randomness, tokenId)
 depositHash = Poseidon(ownerCipherPayPubKey, amount, nonce)
 ```
 
+### Merkle Tree Operations
+```javascript
+// For deposit circuit
+newMerkleRoot = computeMerkleRoot(newCommitment, inPathElements, inPathIndices)
+newNextLeafIndex = nextLeafIndex + 1
+```
+
 ## Security Properties
 
 ### Privacy
@@ -100,11 +109,26 @@ cd cipherpay-circuits
 # Install dependencies
 npm install
 
-# Build circuits
+# Build circuits (includes ptau generation)
 node scripts/setup.js
 
 # Run tests
 npm test
+```
+
+### Manual Ptau Setup (if needed)
+```bash
+# Create build directory
+mkdir -p build
+
+# Generate ptau files manually
+cd build
+npx snarkjs powersoftau new bn128 14 pot14_0000.ptau
+npx snarkjs powersoftau prepare phase2 pot14_0000.ptau pot14_final.ptau
+cd ..
+
+# Build circuits
+node scripts/setup.js
 ```
 
 ## Testing
@@ -171,20 +195,29 @@ Tests:       28 passed, 28 total
 }
 ```
 
-### Deposit Circuit (8 signals)
+### Deposit Circuit (46 signals)
 ```javascript
 {
-    // Private inputs (5 signals)
+    // Private inputs (39 signals)
     ownerWalletPubKey: 1234567890,
     ownerWalletPrivKey: 1111111111,
     randomness: 9876543210,
     tokenId: 1,
     memo: 0,
+    inPathElements: Array(16).fill(0), // Merkle path elements
+    inPathIndices: Array(16).fill(0),  // Merkle path indices
+    nextLeafIndex: 0,                   // Current next leaf index
 
     // Public inputs (3 signals)
     nonce: 3333333333,
     amount: 100,
-    depositHash: 7777777777
+    depositHash: 7777777777,
+    
+    // Public outputs (4 signals) - automatically generated
+    // newCommitment: Shielded note commitment
+    // ownerCipherPayPubKey: Derived CipherPay identity  
+    // newMerkleRoot: New merkle root after adding commitment
+    // newNextLeafIndex: Next leaf index after insertion
 }
 ```
 
@@ -210,7 +243,7 @@ Tests:       28 passed, 28 total
 
 ### Circuit Complexity
 - **Transfer**: ~215 constraints
-- **Deposit**: ~214 constraints
+- **Deposit**: ~4,694 constraints (with Merkle tree)
 - **Withdraw**: ~215 constraints
 
 ### Proof Generation
@@ -225,6 +258,52 @@ Tests:       28 passed, 28 total
 
 ## Build Process
 
+### Power of Tau (Ptau) Files
+Before building circuits, you need power of tau files for the Groth16 setup. These files are used to generate proving and verification keys.
+
+#### Generating Ptau Files
+```bash
+# Create a new power of tau file (only needed once)
+cd build
+npx snarkjs powersoftau new bn128 14 pot14_0000.ptau
+
+# Contribute to the ceremony (optional, for security)
+npx snarkjs powersoftau contribute pot14_0000.ptau pot14_0001.ptau --name="Your Name"
+
+# Prepare phase 2 (required for each circuit)
+npx snarkjs powersoftau prepare phase2 pot14_0001.ptau pot14_final.ptau
+```
+
+#### Using Existing Ptau Files
+If you have existing ptau files, you can use them directly:
+```bash
+# Copy existing ptau files to build directory
+cp /path/to/your/pot14_final.ptau build/pot14_final.ptau
+```
+
+#### Ptau File Requirements
+- **Size**: Must be large enough for your circuit (14 for most circuits)
+- **Curve**: Must use bn128 curve for compatibility
+- **Phase**: Must be prepared for phase 2 (final.ptau)
+
+#### Ptau File Management
+```bash
+# Check ptau file size
+npx snarkjs powersoftau info pot14_final.ptau
+
+# Verify ptau file integrity
+npx snarkjs powersoftau verify pot14_final.ptau
+
+# List available ptau files
+ls -la build/*.ptau
+```
+
+#### Best Practices
+- **Security**: Use trusted ptau files from public ceremonies
+- **Size**: Choose ptau size based on circuit complexity (14 for most, 16+ for large circuits)
+- **Storage**: Ptau files can be reused across multiple circuits
+- **Backup**: Keep backups of your ptau files
+
 ### Generated Files
 Each circuit generates:
 - `{circuit}.r1cs` - R1CS constraint system
@@ -238,11 +317,46 @@ Each circuit generates:
 # Build all circuits
 node scripts/setup.js
 
+# Generate zkey and verification key for specific circuit
+node scripts/generate-zkey-vk.js deposit
+
 # Generate proof for specific circuit
 node scripts/generate-proof.js transfer
 node scripts/generate-proof.js withdraw
 node scripts/generate-proof.js deposit
+
+# Convert verification keys to binary format for Solana
+node scripts/convert-vk-to-binary.js
+
+# Generate binary proof files for Solana testing
+node scripts/generate-binary-proofs.js
 ```
+
+### Setup Process Details
+The `setup.js` script automatically handles ptau file generation if they don't exist:
+1. **Compilation**: Circuits compiled to R1CS format
+2. **Shared Ptau**: Creates single ptau file shared by all circuits
+3. **Proving Keys**: Generates Groth16 proving keys using shared ptau file
+4. **Verification Keys**: Exports verification keys for on-chain use
+5. **File Distribution**: Copies keys to expected locations
+
+## Solana Integration
+
+### Binary Format Conversion
+The circuits support Solana on-chain verification through binary format conversion:
+
+```bash
+# Convert JSON verification keys to binary
+node scripts/convert-vk-to-binary.js
+
+# Generate binary proof files for testing
+node scripts/generate-binary-proofs.js
+```
+
+### Generated Binary Files
+- `{circuit}_vk.bin` - Binary verification key for groth16-solana
+- `deposit_proof.bin` - Binary proof (512 bytes)
+- `deposit_public_inputs.bin` - Binary public signals (128 bytes)
 
 ## Troubleshooting
 
@@ -273,6 +387,32 @@ node scripts/generate-proof.js deposit
    node --max-old-space-size=4096 scripts/setup.js
    ```
 
+6. **"InvalidZkProof" in Solana tests**
+   ```bash
+   # Regenerate verification keys
+   node scripts/setup.js
+   node scripts/convert-vk-to-binary.js
+   # Rebuild anchor program
+   anchor build -- --features real-crypto
+   ```
+
+7. **"ptau file not found" or "Invalid ptau file"**
+   ```bash
+   # Regenerate ptau files
+   cd build
+   npx snarkjs powersoftau new bn128 14 pot14_0000.ptau
+   npx snarkjs powersoftau prepare phase2 pot14_0000.ptau pot14_final.ptau
+   # Rebuild circuits
+   cd .. && node scripts/setup.js
+   ```
+
+8. **"ptau file too small"**
+   ```bash
+   # Use larger ptau file (increase size from 14 to 16 or higher)
+   npx snarkjs powersoftau new bn128 16 pot16_0000.ptau
+   npx snarkjs powersoftau prepare phase2 pot16_0000.ptau pot16_final.ptau
+   ```
+
 ## Documentation
 
 For detailed documentation, see the `/docs` directory:
@@ -296,7 +436,12 @@ cipherpay-circuits/
 │   └── proof-generation.test.js
 ├── scripts/                    # Build scripts
 │   ├── setup.js
-│   └── generate-proof.js
+│   ├── generate-zkey-vk.js
+│   ├── generate-proof.js
+│   ├── verify-proof.js
+│   ├── convert-vk-to-binary.js
+│   ├── generate-binary-proofs.js
+│   └── README.md
 ├── build/                      # Build outputs
 ├── docs/                       # Documentation
 └── package.json
