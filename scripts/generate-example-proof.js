@@ -307,7 +307,7 @@ const exampleInputs = {
     inPathIndices: Array(16).fill(0),
     nextLeafIndex: "0",
     nonce: "0",
-    amount: "0",
+    amount: "100",
     // depositHash will be derived automatically
   },
 };

@@ -5,7 +5,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { generateProof, exampleInputs } = require("./generate-proof.js");
+const { generateProof, exampleInputs } = require("./generate-example-proof.js");
 
 // BN254 (bn128) field prime
 const FQ =
