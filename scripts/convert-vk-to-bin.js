@@ -30,7 +30,7 @@ const CLI = {
   out: null,
   batch: false,
   includeAlphaBeta: false,
-  endianness: "le",   // "le" | "be"
+  endianness: "be",   // "le" | "be"
   icOverride: null,   // number | null  (forces expected IC length = icOverride+1)
   force: false,       // bypass hard checks (still warns)
 };

@@ -1,0 +1,22 @@
+{
+    "ownerWalletPubKey": "0",
+    "ownerWalletPrivKey": "0",
+    "randomness": "0",
+    "tokenId": "0",
+    "memo": "0",
+  
+    "inPathElements": [
+      "0","0","0","0","0","0","0","0",
+      "0","0","0","0","0","0","0","0"
+    ],
+    "inPathIndices": [
+      "0","0","0","0","0","0","0","0",
+      "0","0","0","0","0","0","0","0"
+    ],
+    "nextLeafIndex": "0",
+  
+    "nonce": "0",
+    "amount": "100",
+    "depositHash": "0"
+  }
+  

@@ -40,7 +40,7 @@ const LABELS = {
     "depositHash",
   ],
 
-  // transfer: outputs first (8), then public inputs (2)
+  // transfer: outputs first (7), then public inputs (2)
   transfer: [
     "outCommitment1",
     "outCommitment2",

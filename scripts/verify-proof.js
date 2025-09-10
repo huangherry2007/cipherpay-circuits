@@ -56,6 +56,7 @@ async function verifyProof(circuitName) {
         publicSignals.forEach((signal, index) => {
             console.log(`  [${index}]: ${signal}`);
         });
+        process.exit(0);
     } else {
         console.error('❌ Proof is invalid!');
         process.exit(1);
