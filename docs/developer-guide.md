@@ -31,6 +31,60 @@
    npm test
    ```
 
+## Build Process
+
+### Complete Setup
+```bash
+# Build all circuits and generate keys
+node scripts/setup.js
+```
+
+### Individual Circuit Building
+```bash
+# Build specific circuit
+npm run build:deposit
+npm run build:transfer
+npm run build:withdraw
+
+# Build all circuits
+npm run build:all
+```
+
+### Script Usage
+
+#### Setup and Key Generation
+```bash
+# Complete setup (recommended)
+node scripts/setup.js
+
+# Generate zkey and verification keys for specific circuit
+node scripts/generate-zkey-vk.js deposit
+
+# Generate power of tau files
+node scripts/generate-ptau.js --power 14
+```
+
+#### Proof Generation
+```bash
+# Generate example proof for deposit circuit
+node scripts/generate-example-proof.js deposit
+
+# Generate binary proofs for Solana integration
+node scripts/generate-bin-proofs.js deposit
+
+# Verify proof
+node scripts/verify-proof.js deposit
+```
+
+#### Solana Integration
+```bash
+# Convert verification keys to binary format
+node scripts/convert-vk-to-bin.js --all
+
+# Generate binary proof files
+node scripts/generate-bin-proofs.js --all
+```
+
 ## Project Structure
 
 ```
@@ -47,7 +101,12 @@ cipherpay-circuits/
 │   └── proof-generation.test.js
 ├── scripts/                    # Build scripts
 │   ├── setup.js
-│   └── generate-proof.js
+│   ├── generate-zkey-vk.js
+│   ├── generate-example-proof.js
+│   ├── convert-vk-to-bin.js
+│   ├── generate-bin-proofs.js
+│   ├── verify-proof.js
+│   └── generate-ptau.js
 ├── build/                      # Build outputs
 ├── docs/                       # Documentation
 └── package.json
@@ -59,21 +118,21 @@ cipherpay-circuits/
 
 CipherPay circuits are written in **Circom 2.1.4** and use the **Groth16** proving system. Each circuit implements specific privacy-preserving functionality:
 
-#### Transfer Circuit
-- **Purpose**: Shielded transfers between users
-- **Inputs**: 19 signals (18 private + 1 public)
-- **Outputs**: 5 signals (commitments, nullifier, merkle root)
-- **Key Feature**: Encrypted note delivery for recipient privacy
-
 #### Deposit Circuit
 - **Purpose**: Convert public funds to shielded notes
-- **Inputs**: 8 signals (5 private + 3 public)
-- **Outputs**: 2 signals (commitment, identity)
-- **Key Feature**: Privacy-enhanced deposit hash binding
+- **Inputs**: 6 signals (5 private + 3 public)
+- **Outputs**: 4 signals (commitment, identity, merkle root, leaf index)
+- **Key Feature**: Privacy-enhanced deposit hash binding with Merkle tree integration
+
+#### Transfer Circuit
+- **Purpose**: Shielded transfers between users
+- **Inputs**: 9 signals (7 private + 2 public)
+- **Outputs**: 7 signals (commitments, nullifier, merkle roots, leaf index)
+- **Key Feature**: Encrypted note delivery for recipient privacy
 
 #### Withdraw Circuit
 - **Purpose**: Convert shielded notes to public funds
-- **Inputs**: 9 signals (5 private + 4 public)
+- **Inputs**: 5 signals (5 private + 3 public)
 - **Outputs**: 2 signals (nullifier, merkle root)
 - **Key Feature**: Identity verification and commitment validation
 

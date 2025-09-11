@@ -186,7 +186,7 @@ async function generateProof(circuitName, input) {
 
   const buildPath = path.join(__dirname, `../build/${circuitName}`);
   const wasmPath = path.join(buildPath, `${circuitName}_js/${circuitName}.wasm`);
-  const zkeyPath = path.join(buildPath, `${circuitName}.zkey`);
+  const zkeyPath = path.join(buildPath, `${circuitName}_final.zkey`);
 
   if (!fs.existsSync(wasmPath)) {
     throw new Error(`WASM file not found at ${wasmPath}. Please run setup.js first.`);

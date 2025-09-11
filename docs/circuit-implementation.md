@@ -38,6 +38,54 @@ build/{circuit_name}/
 
 ## Circuit Details
 
+### Deposit Circuit
+
+**File**: `circuits/deposit/deposit.circom`
+
+**Purpose**: Converts public funds to shielded notes with Merkle tree integration.
+
+**Key Components**:
+1. **Identity Derivation**: Derives owner's CipherPay identity from wallet keys
+2. **Note Commitment**: Computes commitment for new shielded note
+3. **Merkle Tree Update**: Updates Merkle tree with new commitment
+4. **Deposit Hash Verification**: Verifies privacy-enhanced deposit binding
+
+**Input Structure**:
+```javascript
+{
+  // Private inputs (5 signals)
+  ownerWalletPubKey: number,
+  ownerWalletPrivKey: number,
+  randomness: number,
+  tokenId: number,
+  memo: number,
+  inPathElements: number[16],
+  inPathIndices: number[16],
+  nextLeafIndex: number,
+  
+  // Public inputs (3 signals)
+  nonce: number,
+  amount: number,
+  depositHash: number
+}
+```
+
+**Output Structure**:
+```javascript
+{
+  // Public outputs (4 signals)
+  newCommitment: number,
+  ownerCipherPayPubKey: number,
+  newMerkleRoot: number,
+  newNextLeafIndex: number
+}
+```
+
+**Constraints**:
+- Deposit hash verification: `depositHash === Poseidon(ownerCipherPayPubKey, amount, nonce)`
+- Merkle tree path verification
+- Commitment reconstruction for new note
+
 ### Transfer Circuit
 
 **File**: `circuits/transfer/transfer.circom`
@@ -54,7 +102,7 @@ build/{circuit_name}/
 **Input Structure**:
 ```javascript
 {
-  // Private inputs (18 signals)
+  // Private inputs (7 signals)
   inAmount: number,
   inSenderWalletPubKey: number,
   inSenderWalletPrivKey: number,
@@ -74,8 +122,23 @@ build/{circuit_name}/
   out2TokenId: number,
   out2Memo: number,
   
-  // Public inputs (1 signal)
-  encryptedNote: number
+  // Public inputs (2 signals)
+  encNote1Hash: number,
+  encNote2Hash: number
+}
+```
+
+**Output Structure**:
+```javascript
+{
+  // Public outputs (7 signals)
+  outCommitment1: number,
+  outCommitment2: number,
+  nullifier: number,
+  merkleRoot: number,
+  newMerkleRoot1: number,
+  newMerkleRoot2: number,
+  newNextLeafIndex: number
 }
 ```
 
@@ -84,40 +147,6 @@ build/{circuit_name}/
 - Token consistency: `inTokenId === out1TokenId === out2TokenId`
 - Merkle path verification for input note
 - Commitment reconstruction for output notes
-
-### Deposit Circuit
-
-**File**: `circuits/deposit/deposit.circom`
-
-**Purpose**: Converts public funds to shielded notes with privacy-enhanced binding.
-
-**Key Components**:
-1. **Identity Derivation**: Derives owner's CipherPay identity from wallet keys
-2. **Note Commitment**: Creates new shielded note commitment
-3. **Deposit Hash Verification**: Validates privacy-enhanced deposit binding
-4. **Nonce Uniqueness**: Prevents hash collisions
-
-**Input Structure**:
-```javascript
-{
-  // Private inputs (5 signals)
-  ownerWalletPubKey: number,
-  ownerWalletPrivKey: number,
-  randomness: number,
-  tokenId: number,
-  memo: number,
-  
-  // Public inputs (3 signals)
-  nonce: number,
-  amount: number,
-  depositHash: number
-}
-```
-
-**Constraints**:
-- Deposit hash validation: `Poseidon(ownerCipherPayPubKey, amount, nonce) === depositHash`
-- Note commitment generation
-- Identity derivation from wallet keys
 
 ### Withdraw Circuit
 
@@ -141,11 +170,21 @@ build/{circuit_name}/
   pathElements: number[16],
   pathIndices: number[16],
   
-  // Public inputs (4 signals)
+  commitment: number,
+  
+  // Public inputs (3 signals)
   recipientWalletPubKey: number,
   amount: number,
-  tokenId: number,
-  commitment: number
+  tokenId: number
+}
+```
+
+**Output Structure**:
+```javascript
+{
+  // Public outputs (2 signals)
+  nullifier: number,
+  merkleRoot: number
 }
 ```
 

@@ -1,220 +1,65 @@
-#!/usr/bin/env node
-
-/**
- * Drop-in generate-zkey-vk.js
- * - Works with build/<circuit>/{circuit}.r1cs
- * - Produces build/<circuit>/{circuit}.zkey and verification_key.json
- * - Guardrails:
- *    • Optional zkey verification (on by default)
- *    • Rejects vkey if all IC points are [0,1,0] (infinity)
- *    • Optional nPublic check via --expected-publics or env
- *
- * ENV:
- *   EXPECTED_PUBLICS=<n>                 // global default
- *   EXPECTED_PUBLICS_deposit=<n>         // per-circuit override
- *   EXPECTED_PUBLICS_transfer=<n>
- *   EXPECTED_PUBLICS_withdraw=<n>
- *
- * CLI:
- *   node scripts/generate-zkey-vk.js [circuit]
- *     --expected-publics <n>
- *     --ptau-size <p>              // default 14
- *     --no-auto-ptau               // require ptau to exist
- *     --skip-verify                // skip 'snarkjs zkey verify'
- *     --allow-infinity-ic          // do not enforce IC ≠ infinity
- *     --stop-on-error              // stop when one circuit fails
- */
-
+// scripts/generate-zkey-vk.js
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const crypto = require('crypto');
 
-function relativeFromRoot(p) {
-  try { return path.relative(path.join(__dirname, '..'), p); } catch { return p; }
+function sh(cmd, opts = {}) { execSync(cmd, { stdio: 'inherit', ...opts }); }
+function randomHex(n = 32) {
+  if (process.env.ENTROPY_HEX && process.env.ENTROPY_HEX.length >= n * 2) {
+    return process.env.ENTROPY_HEX.slice(0, n * 2);
+  }
+  return crypto.randomBytes(n).toString('hex');
 }
 
-function readJson(p) {
-  return JSON.parse(fs.readFileSync(p, 'utf8'));
-}
+/**
+ * Generate zkey + verification key for a circuit.
+ * @param {string} circuitName e.g., 'deposit'
+ * @param {object} opts
+ *  - ptauSize: number (default 14)
+ *  - ptauPath: string directory where pot<ptauSize>_final.ptau lives (default 'build/')
+ *  - autoGeneratePtau: boolean (default false) – if true and final ptau is missing, will run generate-ptau.js
+ */
+async function generateZkeyAndVk(circuitName, opts = {}) {
+  const ptauSize = opts.ptauSize ?? 14;
+  const ptauPath = path.resolve(opts.ptauPath ?? 'build');
+  const buildDir = path.join(__dirname, '..', 'build', circuitName);
 
-function isInfinityG1(p) {
-  // Projective coords exported by snarkjs as strings: [ "0","1","0" ]
-  return Array.isArray(p) && p.length === 3 && p[0] === '0' && p[1] === '1' && p[2] === '0';
-}
+  const r1cs = path.join(buildDir, `${circuitName}.r1cs`);
+  const zkey0 = path.join(buildDir, `${circuitName}_0000.zkey`);
+  const zkey1 = path.join(buildDir, `${circuitName}_0001.zkey`);
+  const zkeyFinal = path.join(buildDir, `${circuitName}_final.zkey`);
+  const vkJson = path.join(buildDir, 'verification_key.json');
 
-function assertNonInfinityIC(vk) {
-  if (!Array.isArray(vk.IC) || vk.IC.length === 0) {
-    throw new Error('VK missing IC array.');
-  }
-  if (vk.IC.every(isInfinityG1)) {
-    throw new Error('All IC points are [0,1,0] (infinity) — public signals are unconstrained.');
-  }
-}
-
-function assertExpectedPublics(vk, expectedPublics, circuitName) {
-  if (typeof expectedPublics !== 'number') return; // no expectation set
-  if (vk.nPublic !== expectedPublics) {
-    throw new Error(`nPublic mismatch for ${circuitName}: expected ${expectedPublics}, got ${vk.nPublic}`);
-  }
-  if (Array.isArray(vk.IC) && vk.IC.length !== expectedPublics + 1) {
-    throw new Error(`IC length mismatch for ${circuitName}: expected ${expectedPublics + 1}, got ${vk.IC.length}`);
-  }
-}
-
-function resolveOptionsWithEnv(circuitName, options) {
-  const out = { ...options };
-  if (out.autoGeneratePtau === undefined) out.autoGeneratePtau = true;
-  if (out.ptauSize === undefined) out.ptauSize = 14;
-  if (out.verifyZkey === undefined) out.verifyZkey = true;
-  if (out.requireNonInfinityIC === undefined) out.requireNonInfinityIC = true;
-
-  if (out.expectedPublics === undefined) {
-    const perCircuit = process.env[`EXPECTED_PUBLICS_${circuitName}`];
-    const globalExp  = process.env.EXPECTED_PUBLICS;
-    if (perCircuit) out.expectedPublics = parseInt(perCircuit, 10);
-    else if (globalExp) out.expectedPublics = parseInt(globalExp, 10);
-  }
-  return out;
-}
-
-async function createPtauFile(buildPath, size = 14) {
-  const pot0 = path.join(buildPath, `pot${size}_0000.ptau`);
-  const potFinal = path.join(buildPath, `pot${size}_final.ptau`);
-  console.log(`    ⚙️  ptn bn128 2^${size} ...`);
-  execSync(`snarkjs ptn bn128 ${size} ${pot0}`, { stdio: 'inherit', cwd: buildPath });
-  console.log('    ⚙️  pt2 ...');
-  execSync(`snarkjs pt2 ${pot0} ${potFinal}`, { stdio: 'inherit', cwd: buildPath });
-  console.log(`    ✅ ptau ready: ${relativeFromRoot(potFinal)}`);
-  return potFinal;
-}
-
-async function getPtauFile(buildPath, options = {}) {
-  const sharedBuildPath = path.join(__dirname, '../build');
-  const ptauPath = path.join(sharedBuildPath, `pot${options.ptauSize || 14}_final.ptau`);
-  if (fs.existsSync(ptauPath)) return ptauPath;
-  if (options.autoGeneratePtau !== false) {
-    console.log('  🔧 Creating shared ptau...');
-    await createPtauFile(sharedBuildPath, options.ptauSize || 14);
-    return ptauPath;
-  }
-  throw new Error(`Ptau not found: ${ptauPath}`);
-}
-
-async function generateZkeyAndVk(circuitName, options = {}) {
-  console.log(`🔧 Generating zkey and verification key for ${circuitName}...`);
-
-  const buildPath = path.join(__dirname, `../build/${circuitName}`);
-  const r1csPath  = path.join(buildPath, `${circuitName}.r1cs`);
-  const zkeyPath  = path.join(buildPath, `${circuitName}.zkey`);
-  const vkPath    = path.join(buildPath, 'verification_key.json');
-
-  if (!fs.existsSync(r1csPath)) {
-    throw new Error(`R1CS not found: ${relativeFromRoot(r1csPath)}. Compile with circom first.`);
-  }
-
-  const resolved = resolveOptionsWithEnv(circuitName, options);
-
-  try {
-    // 1) ptau
-    const ptauPath = await getPtauFile(buildPath, resolved);
-    console.log(`  📁 Using ptau: ${relativeFromRoot(ptauPath)}`);
-
-    // 2) zkey
-    console.log('  🔑 Generating zkey...');
-    execSync(`snarkjs g16s ${r1csPath} ${ptauPath} ${zkeyPath}`, { stdio: 'inherit', cwd: buildPath });
-    console.log(`  ✅ zkey: ${relativeFromRoot(zkeyPath)}`);
-
-    // 2b) verify zkey (optional)
-    if (resolved.verifyZkey) {
-      console.log('  🔍 Verifying zkey...');
-      execSync(`snarkjs zkey verify ${r1csPath} ${ptauPath} ${zkeyPath}`, { stdio: 'inherit', cwd: buildPath });
-      console.log('  ✅ zkey verified');
-    }
-
-    // 3) export vkey
-    console.log('  📋 Exporting verification key...');
-    execSync(`snarkjs zkev ${zkeyPath} ${vkPath}`, { stdio: 'inherit', cwd: buildPath });
-    console.log(`  ✅ vkey: ${relativeFromRoot(vkPath)}`);
-
-    // 4) vkey checks
-    const vk = readJson(vkPath);
-    console.log(`  📊 VK: nPublic=${vk.nPublic}, IC=${vk.IC?.length}, protocol=${vk.protocol}, curve=${vk.curve}`);
-
-    assertExpectedPublics(vk, resolved.expectedPublics, circuitName);
-    if (resolved.requireNonInfinityIC) assertNonInfinityIC(vk);
-
-    // 5) convenience copy
-    const testVkPath = path.join(buildPath, `verifier-${circuitName}.json`);
-    fs.copyFileSync(vkPath, testVkPath);
-    console.log(`  📄 Copied vkey → ${relativeFromRoot(testVkPath)}`);
-
-    return { zkeyPath, vkPath, testVkPath, info: { nPublic: vk.nPublic, IC: vk.IC?.length, protocol: vk.protocol, curve: vk.curve } };
-  } catch (e) {
-    console.error(`  ❌ Error generating zkey/vk for ${circuitName}:`, e.message);
-    throw e;
-  }
-}
-
-async function generateAllZkeys(options = {}) {
-  console.log('🔧 Generating zkeys & vkeys for all circuits...');
-  const circuits = ['transfer', 'withdraw', 'deposit'];
-  const results = {};
-  for (const c of circuits) {
-    console.log(`\n📦 ${c} ...`);
-    try {
-      results[c] = await generateZkeyAndVk(c, options);
-      console.log(`  ✅ ${c} done`);
-    } catch (e) {
-      console.error(`  ❌ ${c} failed: ${e.message}`);
-      if (options.stopOnError) throw e;
-    }
-  }
-  console.log('\n🎉 All done');
-  return results;
-}
-
-async function main() {
-  const args = process.argv.slice(2);
-  const circuitName = args[0];
-
-  const options = {
-    autoGeneratePtau: true,
-    ptauSize: 14,
-    stopOnError: false,
-    verifyZkey: true,
-    requireNonInfinityIC: true,
-  };
-
-  for (let i = 1; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--no-auto-ptau') options.autoGeneratePtau = false;
-    else if (a === '--ptau-size' && args[i+1]) options.ptauSize = parseInt(args[++i], 10);
-    else if (a === '--stop-on-error') options.stopOnError = true;
-    else if (a === '--skip-verify') options.verifyZkey = false;
-    else if (a === '--allow-infinity-ic') options.requireNonInfinityIC = false;
-    else if (a === '--expected-publics' && args[i+1]) options.expectedPublics = parseInt(args[++i], 10);
-  }
-
-  try {
-    if (circuitName) {
-      await generateZkeyAndVk(circuitName, options);
-      console.log(`\n✅ Successfully generated zkey/vk for ${circuitName}`);
+  const ptauFinal = path.join(ptauPath, `pot${ptauSize}_final.ptau`);
+  if (!fs.existsSync(ptauFinal)) {
+    if (opts.autoGeneratePtau) {
+      console.log(`⚙️  ptau not found at ${ptauFinal}; generating...`);
+      const gen = path.join(__dirname, 'generate-ptau.js');
+      sh(`node "${gen}" --out "${ptauPath}" --power ${ptauSize}`);
     } else {
-      await generateAllZkeys(options);
+      throw new Error(`Missing ${ptauFinal}. Set autoGeneratePtau=true or run generate-ptau.js first.`);
     }
-  } catch (e) {
-    console.error('❌ Generation failed:', e.message);
-    process.exit(1);
   }
+
+  if (!fs.existsSync(r1cs)) throw new Error(`Missing ${r1cs}. Compile the circuit first.`);
+
+  console.log(`   ▶ snarkjs groth16 setup (${circuitName})`);
+  sh(`snarkjs groth16 setup "${r1cs}" "${ptauFinal}" "${zkey0}"`);
+
+  console.log(`   ▶ snarkjs zkey contribute (${circuitName})`);
+  const ENTROPY2 = randomHex(32);
+  sh(`snarkjs zkey contribute "${zkey0}" "${zkey1}" --name="zkey-contrib-1" -v -e="${ENTROPY2}"`);
+
+  console.log(`   ▶ snarkjs zkey beacon & verify (${circuitName})`);
+  const BEACON = 'f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff00112233445566778899aabbccddeeff';
+  sh(`snarkjs zkey beacon "${zkey1}" "${zkeyFinal}" ${BEACON} 10 -n="zkey-final"`);
+  sh(`snarkjs zkey verify "${r1cs}" "${ptauFinal}" "${zkeyFinal}"`);
+
+  console.log(`   ▶ export verification key (${circuitName})`);
+  sh(`snarkjs zkey export verificationkey "${zkeyFinal}" "${vkJson}"`);
+
+  console.log(`   ✅ zkey/vk for ${circuitName} ready`);
 }
 
-module.exports = {
-  generateZkeyAndVk,
-  generateAllZkeys,
-  getVerificationKeyInfo: (vkPath) => readJson(vkPath),
-  createPtauFile,
-};
-
-if (require.main === module) {
-  main();
-}
+module.exports = { generateZkeyAndVk };

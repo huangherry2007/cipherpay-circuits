@@ -18,33 +18,28 @@ node scripts/setup.js
 - Creates shared ptau file for all circuits (if needed)
 - Creates proving keys (.zkey files) using Groth16
 - Exports verification keys for on-chain verification
-- Copies verification keys to expected test locations
 - Automatically generates ptau files if needed
 
 **Generated files per circuit:**
 - `{circuit}.r1cs` - R1CS constraint system
 - `{circuit}_js/{circuit}.wasm` - WebAssembly circuit
-- `{circuit}.zkey` - Proving key (Groth16)
+- `{circuit}_final.zkey` - Final proving key (Groth16)
 - `verification_key.json` - Verification key
-- `verifier-{circuit}.json` - Renamed verification key for tests
 
 **Shared files:**
 - `pot14_final.ptau` - Shared power of tau file for all circuits
 
 **Circuits built:**
-- `transfer` - Shielded transfers with encrypted note delivery (19 signals)
-- `deposit` - Public to shielded conversion with Merkle tree integration (46 signals)
-- `withdraw` - Shielded to public conversion with identity verification (9 signals)
+- `deposit` - Public to shielded conversion with Merkle tree integration (6 signals)
+- `transfer` - Shielded transfers with encrypted note delivery (9 signals)
+- `withdraw` - Shielded to public conversion with identity verification (5 signals)
 
 ### 2. `generate-zkey-vk.js` - ZKey and Verification Key Generation
 Dedicated script for generating zkey files and verification keys with advanced options.
 
 **Usage:**
 ```bash
-# Generate for all circuits
-node scripts/generate-zkey-vk.js
-
-# Generate for specific circuit
+# Generate for specific circuit (called by setup.js)
 node scripts/generate-zkey-vk.js deposit
 
 # Generate with custom options
@@ -61,22 +56,21 @@ node scripts/generate-zkey-vk.js deposit --ptau-size 16 --no-auto-ptau
 - Generates or finds ptau files
 - Creates zkey files using Groth16 setup
 - Exports verification keys
-- Creates test verification key copies
 - Displays verification key information
 
-### 3. `generate-proof.js` - Proof Generation
-Generates zero-knowledge proofs for any core circuit.
+### 3. `generate-example-proof.js` - Example Proof Generation
+Generates zero-knowledge proofs for any core circuit with example inputs.
 
 **Usage:**
 ```bash
 # Generate proof for transfer circuit
-node scripts/generate-proof.js transfer
+node scripts/generate-example-proof.js transfer
 
 # Generate proof for withdraw circuit
-node scripts/generate-proof.js withdraw
+node scripts/generate-example-proof.js withdraw
 
 # Generate proof for deposit circuit
-node scripts/generate-proof.js deposit
+node scripts/generate-example-proof.js deposit
 ```
 
 **Available circuits:**
@@ -88,13 +82,27 @@ node scripts/generate-proof.js deposit
 - `proof.json` - Zero-knowledge proof
 - `public_signals.json` - Public signals for verification
 
-### 4. `convert-vk-to-binary.js` - Verification Key Conversion
+### 4. `convert-vk-to-bin.js` - Verification Key Conversion
 Converts JSON verification keys to binary format for Solana on-chain verification.
 
 **Usage:**
 ```bash
-node scripts/convert-vk-to-binary.js --batch
+# Convert all circuits
+node scripts/convert-vk-to-bin.js --all
+
+# Convert specific circuit
+node scripts/convert-vk-to-bin.js --circuit deposit
+
+# Convert with custom options
+node scripts/convert-vk-to-bin.js --circuit deposit --endianness le --include-alphabeta
 ```
+
+**Options:**
+- `--all` - Convert all circuits
+- `--circuit <name>` - Convert specific circuit
+- `--endianness <le|be>` - Set endianness (default: be)
+- `--include-alphabeta` - Include vk_alphabeta_12 in output
+- `--force` - Bypass validation checks
 
 **What it does:**
 - Reads JSON verification keys from `build/{circuit}/verification_key.json`
@@ -102,47 +110,69 @@ node scripts/convert-vk-to-binary.js --batch
 - Outputs binary files to `../cipherpay-anchor/src/zk_verifier/{circuit}_vk.bin`
 - Supports groth16-solana library format
 
-### 5. `generate-binary-proofs.js` - Binary Proof Generation
+### 5. `generate-bin-proofs.js` - Binary Proof Generation
 Generates binary proof files for Solana integration testing.
 
 **Usage:**
 ```bash
 # Deposit with built-in example inputs
-node scripts/generate-binary-proofs.js
+node scripts/generate-bin-proofs.js
 
 # Transfer / Withdraw with built-in example inputs
-node scripts/generate-binary-proofs.js transfer
-node scripts/generate-binary-proofs.js withdraw
+node scripts/generate-bin-proofs.js transfer
+node scripts/generate-bin-proofs.js withdraw
 
-# Use your own input JSON (must match the circuit’s signals)
-node scripts/generate-binary-proofs.js deposit -i my-deposit-input.json
+# Use your own input JSON (must match the circuit's signals)
+node scripts/generate-bin-proofs.js deposit -i my-deposit-input.json
 
 # Generate all three in one go
-node scripts/generate-binary-proofs.js --all
+node scripts/generate-bin-proofs.js --all
 ```
 
 **What it does:**
 - Generates a deposit proof using example inputs
 - Converts proof and public signals to binary format
 - Saves binary files to `../cipherpay-anchor/proofs/`
-- Creates `deposit_proof.bin` (512 bytes) and `deposit_public_inputs.bin` (128 bytes)
+- Creates `deposit_proof.bin` (256 bytes) and `deposit_public_signals.bin` (192 bytes)
 
 **Generated files:**
 - `deposit_proof.bin` - Binary Groth16 proof for on-chain verification
-- `deposit_public_inputs.bin` - Binary public signals (4 outputs × 32 bytes)
+- `deposit_public_signals.bin` - Binary public signals (6 signals × 32 bytes)
 
 ### 6. `verify-proof.js` - Proof Verification
+Verifies zero-knowledge proofs using snarkjs.
 
 **Usage:**
 ```bash
-node scripts/convert-vk-to-binary.js
+# Verify proof for specific circuit
+node scripts/verify-proof.js deposit
+
+# Verify with custom paths
+node scripts/verify-proof.js deposit --proof build/deposit/proof.json --vk build/deposit/verification_key.json
 ```
 
 **What it does:**
-- Reads JSON verification keys from `build/{circuit}/verification_key.json`
-- Converts BN254 curve points to binary format
-- Outputs binary files to `../cipherpay-anchor/src/zk_verifier/{circuit}_vk.bin`
-- Supports groth16-solana library format
+- Loads verification key from JSON file
+- Loads proof and public signals
+- Verifies the proof using snarkjs
+- Reports verification result
+
+### 7. `generate-ptau.js` - Power of Tau Generation
+Generates power of tau files for trusted setup ceremonies.
+
+**Usage:**
+```bash
+# Generate ptau file with default size (14)
+node scripts/generate-ptau.js
+
+# Generate with custom size
+node scripts/generate-ptau.js --power 16 --out build/
+```
+
+**What it does:**
+- Generates power of tau files for Groth16 setup
+- Creates `pot{power}_final.ptau` files
+- Used by other scripts for zkey generation
 
 ## Circuit Input Formats
 
@@ -178,10 +208,10 @@ node scripts/convert-vk-to-binary.js
 }
 ```
 
-### Deposit Circuit (46 signals)
+### Deposit Circuit (6 signals)
 ```javascript
 {
-    // Private inputs (39 signals)
+    // Private inputs (5 signals)
     ownerWalletPubKey: 1234567890,
     ownerWalletPrivKey: 1111111111,
     randomness: 9876543210,
@@ -204,7 +234,7 @@ node scripts/convert-vk-to-binary.js
 }
 ```
 
-### Withdraw Circuit (9 signals)
+### Withdraw Circuit (5 signals)
 ```javascript
 {
     // Private inputs (5 signals)
@@ -283,10 +313,10 @@ npm test
 ### 4. Solana Integration
 ```bash
 # Convert verification keys to binary format
-node scripts/convert-vk-to-binary.js
+node scripts/convert-vk-to-bin.js --all
 
 # Generate binary proof files for testing
-node scripts/generate-binary-proofs.js
+node scripts/generate-bin-proofs.js
 
 # Build anchor program with real-crypto feature
 cd ../cipherpay-anchor && anchor build -- --features real-crypto
@@ -383,7 +413,7 @@ newNextLeafIndex = nextLeafIndex + 1
 
 ### Circuit Complexity
 - **Transfer**: ~215 constraints
-- **Deposit**: ~4,694 constraints (with Merkle tree)
+- **Deposit**: ~214 constraints (with Merkle tree)
 - **Withdraw**: ~215 constraints
 
 ### Proof Generation
@@ -429,7 +459,7 @@ newNextLeafIndex = nextLeafIndex + 1
    ```bash
    # Regenerate verification keys
    node scripts/setup.js
-   node scripts/convert-vk-to-binary.js
+   node scripts/convert-vk-to-bin.js --all
    # Rebuild anchor program
    anchor build -- --features real-crypto
    ```

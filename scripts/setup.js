@@ -1,80 +1,70 @@
-const snarkjs = require('snarkjs');
+// scripts/setup.js
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { generateZkeyAndVk } = require('./generate-zkey-vk.js');
 
-// CipherPay Circuit Setup Script
-// Builds circuits with updated naming conventions
-async function setupCircuits() {
-    console.log('🔧 Setting up CipherPay Circuits...');
-
-    // List of circuits to compile (standalone circuits only)
-    const circuits = [
-        'transfer',
-        'withdraw',
-        'deposit'
-    ];
-
-    // Create build directory if it doesn't exist
-    const buildDir = path.join(__dirname, '../build');
-    if (!fs.existsSync(buildDir)) {
-        fs.mkdirSync(buildDir, { recursive: true });
-    }
-
-    // Create shared ptau file first (if needed)
-    const sharedPtauPath = path.join(buildDir, 'pot14_final.ptau');
-    if (!fs.existsSync(sharedPtauPath)) {
-        console.log('🔧 Creating shared ptau file for all circuits...');
-        const { createPtauFile } = require('./generate-zkey-vk.js');
-        await createPtauFile(buildDir, 14);
-        console.log('✅ Shared ptau file created');
-    }
-
-    for (const circuitName of circuits) {
-        console.log(`\n📦 Building ${circuitName} circuit...`);
-
-        const circuitPath = path.join(__dirname, `../circuits/${circuitName}/${circuitName}.circom`);
-        const buildPath = path.join(buildDir, circuitName);
-
-        // Create circuit build directory
-        if (!fs.existsSync(buildPath)) {
-            fs.mkdirSync(buildPath, { recursive: true });
-        }
-
-        try {
-            // Compile circuit using circom command-line tool
-            console.log(`  Compiling ${circuitName}...`);
-            const r1csPath = path.join(buildPath, `${circuitName}.r1cs`);
-            const wasmPath = path.join(buildPath, `${circuitName}_js`);
-
-            execSync(`circom ${circuitPath} --r1cs --wasm --output ${buildPath} -l node_modules`, {
-                stdio: 'inherit',
-                cwd: path.join(__dirname, '..')  // Run from project root
-            });
-
-            console.log(`  ✅ ${circuitName} compiled successfully`);
-
-            // Generate zkey and verification key using the new script
-            console.log(`  Generating zkey and verification key for ${circuitName}...`);
-            await generateZkeyAndVk(circuitName, {
-                autoGeneratePtau: true,
-                ptauSize: 14
-            });
-
-            console.log(`  ✅ ${circuitName} zkey and vk generated successfully`);
-
-        } catch (error) {
-            console.error(`  ❌ Error building ${circuitName}:`, error.message);
-            throw error;
-        }
-    }
-
-    console.log('\n🎉 All circuits built successfully!');
-    console.log('\n📁 Build artifacts:');
-    for (const circuitName of circuits) {
-        console.log(`  - ${circuitName}: build/${circuitName}/`);
-    }
+function sh(cmd, opts = {}) {
+  execSync(cmd, { stdio: 'inherit', ...opts });
 }
 
-setupCircuits().catch(console.error); 
+async function setupCircuits() {
+  console.log('🔧 Setting up CipherPay Circuits...');
+
+  const circuits = ['transfer', 'withdraw', 'deposit'];
+  const repoRoot = path.join(__dirname, '..');
+  const buildRoot = path.join(repoRoot, 'build');
+
+  if (!fs.existsSync(buildRoot)) fs.mkdirSync(buildRoot, { recursive: true });
+
+  // ---- ptau settings ----
+  const ptauSize = 14;                 // adjust if your circuits need larger (2^14 >= 16384 constraints)
+  const ptauPath = buildRoot;          // default requested
+  const ptauFinal = path.join(ptauPath, `pot${ptauSize}_final.ptau`);
+
+  // 1) Ensure ptau exists (skip generation if final file exists)
+  if (fs.existsSync(ptauFinal)) {
+    console.log(`✅ Using existing ptau: ${path.relative(repoRoot, ptauFinal)}`);
+  } else {
+    console.log('⚙️  Ensuring shared ptau exists via generate-ptau.js...');
+    const gen = path.join(__dirname, 'generate-ptau.js');
+    sh(`node "${gen}" --out "${ptauPath}" --power ${ptauSize}`, { cwd: repoRoot });
+    console.log(`✅ ptau ready at ${path.relative(repoRoot, ptauFinal)}`);
+  }
+
+  // 2) Compile & build each circuit
+  for (const circuitName of circuits) {
+    console.log(`\n📦 Building ${circuitName} circuit...`);
+
+    const circuitPath = path.join(repoRoot, 'circuits', circuitName, `${circuitName}.circom`);
+    const circuitBuildDir = path.join(buildRoot, circuitName);
+    if (!fs.existsSync(circuitBuildDir)) fs.mkdirSync(circuitBuildDir, { recursive: true });
+
+    // 2a) circom compile -> r1cs + wasm
+    console.log(`  🧱 Compiling ${circuitName}...`);
+    sh(`circom "${circuitPath}" --r1cs --wasm --output "${circuitBuildDir}" -l node_modules`, {
+      cwd: repoRoot,
+    });
+    console.log(`  ✅ ${circuitName} compiled`);
+
+    // 2b) zkey + verification key (reuse shared ptau)
+    console.log(`  🔑 Generating zkey & vk for ${circuitName}...`);
+    await generateZkeyAndVk(circuitName, {
+      autoGeneratePtau: false,     // we handled ptau already
+      ptauSize,
+      ptauPath,                    // <-- NEW: default is build/, you can override
+    });
+    console.log(`  ✅ ${circuitName} zkey & vk ready`);
+  }
+
+  console.log('\n🎉 All circuits built successfully!');
+  console.log('\n📁 Build artifacts:');
+  for (const circuitName of circuits) {
+    console.log(`  - ${circuitName}: build/${circuitName}/`);
+  }
+}
+
+setupCircuits().catch((err) => {
+  console.error(err?.message || err);
+  process.exit(1);
+});
