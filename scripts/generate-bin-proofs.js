@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
-
+// scripts/generate-bin-proofs.js
 "use strict";
 
 const fs = require("fs");
@@ -123,6 +123,7 @@ const LABELS = {
     "newNextLeafIndex",
     "amount",
     "depositHash",
+    "oldMerkleRoot",
   ],
   transfer: [
     "outCommitment1",
