@@ -66,9 +66,9 @@ This directory contains comprehensive documentation for the CipherPay zero-knowl
 ## Circuit Summary
 
 ### Core Circuits
-- **Transfer Circuit**: Shielded transfers with encrypted note delivery (19 signals)
-- **Deposit Circuit**: Public to shielded conversion with privacy binding (8 signals)
-- **Withdraw Circuit**: Shielded to public conversion with identity verification (9 signals)
+- **Deposit Circuit**: Public to shielded conversion with privacy binding (6 signals)
+- **Transfer Circuit**: Shielded transfers with encrypted note delivery (9 signals)
+- **Withdraw Circuit**: Shielded to public conversion with identity verification (5 signals)
 
 ### Components
 - **Note Commitment**: Reusable component for note commitment computation (5 signals)

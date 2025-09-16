@@ -1,5 +1,5 @@
-// scripts/generate-proof.js
 /* eslint-disable no-console */
+// scripts/generate-example-proof.js
 const snarkjs = require("snarkjs");
 const fs = require("fs");
 const path = require("path");
@@ -28,9 +28,12 @@ const ensureArray = (val, len, fill = "0") => {
 const booleanize = (arr, len) =>
   ensureArray(arr, len, 0).map((v) => (Number(v) ? 1 : 0));
 
+const isAllZeroish = (arr) =>
+  Array.isArray(arr) && arr.every((v) => (typeof v === "string" ? v.trim() === "0" : Number(v) === 0));
+
 // ---------- labels (publicSignals order) ----------
 const LABELS = {
-  // deposit: outputs first then public inputs (per your deposit.circom)
+  // deposit: outputs first then public inputs
   deposit: [
     "newCommitment",
     "ownerCipherPayPubKey",
@@ -38,9 +41,8 @@ const LABELS = {
     "newNextLeafIndex",
     "amount",
     "depositHash",
+    "oldMerkleRoot",
   ],
-
-  // transfer: outputs first (8), then public inputs (2)
   transfer: [
     "outCommitment1",
     "outCommitment2",
@@ -52,31 +54,54 @@ const LABELS = {
     "encNote1Hash",
     "encNote2Hash",
   ],
-
-  // withdraw (with commitment PRIVATE):
-  // outputs first (2), then public inputs (3)
-  withdraw: [
-    "nullifier",
-    "merkleRoot",
-    "recipientWalletPubKey",
-    "amount",
-    "tokenId",
-  ],
+  withdraw: ["nullifier", "merkleRoot", "recipientWalletPubKey", "amount", "tokenId"],
 };
+
+// ---------- Poseidon + Merkle helpers ----------
+async function getPoseidonClassic() {
+  // dynamic import so we can stay in CommonJS
+  const { buildPoseidon } = await import("circomlibjs");
+  const poseidon = await buildPoseidon(); // classic Poseidon (matches poseidon.circom)
+  const F = poseidon.F;
+  const H = (...xs) => F.toObject(poseidon(xs));
+  return { poseidon, F, H };
+}
+
+/** Compute per-level zeros z[0..depth], where z0 = 0, zi = H(zi-1, zi-1). */
+async function computeZeros(depth) {
+  const { H } = await getPoseidonClassic();
+  const z = [0n];
+  for (let i = 1; i <= depth; i++) z[i] = H(z[i - 1], z[i - 1]);
+  return z;
+}
+
+/** Build path indices from nextLeafIndex (bottom→top). */
+function indicesFromIndex(nextLeafIndex, depth) {
+  const n = Number(nextLeafIndex) >>> 0;
+  return Array.from({ length: depth }, (_, i) => (n >> i) & 1);
+}
+
+// Compute merkle root bottom → top for a given leaf, using Poseidon(left,right)
+function computeRoot(H, leaf, pathElements, pathIndices) {
+  let cur = toBig(leaf);
+  const depth = pathElements.length;
+  for (let i = 0; i < depth; i++) {
+    const sib = toBig(pathElements[i]);
+    const bit = Number(pathIndices[i]) ? 1 : 0;
+    cur = bit === 0 ? H(cur, sib) : H(sib, cur);
+  }
+  return cur;
+}
 
 // ---------- preprocess per circuit ----------
 async function preprocessInput(circuitName, input) {
-  // dynamic import so we can stay in CommonJS
-  const { buildPoseidon } = await import("circomlibjs");
-  const poseidon = await buildPoseidon();
-  const F = poseidon.F;
-  const H = (...xs) => F.toObject(poseidon(xs));
+  const { H } = await getPoseidonClassic();
 
   // deep clone so we don’t mutate the caller’s object
   const out = JSON.parse(JSON.stringify(input || {}));
 
   if (circuitName === "deposit") {
-    // derive ownerCipherPayPubKey -> depositHash
+    // ---- 1) Derive ownerCipherPayPubKey & depositHash ----
     const ownerWalletPubKey = toBig(out.ownerWalletPubKey);
     const ownerWalletPrivKey = toBig(out.ownerWalletPrivKey);
     const amount = toBig(out.amount);
@@ -86,14 +111,40 @@ async function preprocessInput(circuitName, input) {
     const expectedDepositHash = H(ownerCipherPayPubKey, amount, nonce);
 
     if (!out.depositHash || toBig(out.depositHash) !== expectedDepositHash) {
-      console.log("• Overriding depositHash to:", expectedDepositHash.toString());
+      console.log("• Overriding depositHash ->", expectedDepositHash.toString());
       out.depositHash = dec(expectedDepositHash);
     }
 
-    // normalize Merkle inputs (depth = 16)
-    out.inPathElements = ensureArray(out.inPathElements, 16, "0").map(String);
-    out.inPathIndices = booleanize(out.inPathIndices, 16);
-    out.nextLeafIndex = dec(toBig(out.nextLeafIndex));
+    // ---- 2) Normalize Merkle path using per-level zeros ----
+    const DEPTH = Number(out.depth || process.env.CP_TREE_DEPTH || 16);
+    const z = await computeZeros(DEPTH);
+
+    // Always derive indices from nextLeafIndex (safe even when 0)
+    const nextLeafIndex = toBig(out.nextLeafIndex);
+    out.nextLeafIndex = dec(nextLeafIndex);
+    out.inPathIndices = indicesFromIndex(nextLeafIndex, DEPTH);
+
+    // Use per-level zeros as siblings for an EMPTY slot (the append position)
+    // If user provided custom siblings, keep them only if they’re not all zero-ish and length matches.
+    const userElems = ensureArray(out.inPathElements, DEPTH, "0");
+    const useZeros = isAllZeroish(userElems); // if user passed "0"… then we replace with z[i]
+    const pathElements = useZeros ? Array.from({ length: DEPTH }, (_, i) => z[i]) : userElems.map(toBig);
+
+    out.inPathElements = pathElements.map((x) => x.toString());
+
+    if (process.env.DEBUG_ZEROS === "1") {
+      console.log("🔍 depth =", DEPTH);
+      console.log("🔍 nextLeafIndex =", out.nextLeafIndex);
+      console.log("🔍 derived inPathIndices =", out.inPathIndices);
+      console.log("🔍 derived inPathElements[0..3] =", out.inPathElements.slice(0, 4));
+    }
+
+    // ---- 3) Derive oldMerkleRoot for that empty path ----
+    const derivedOldRoot = computeRoot(H, 0n, pathElements, out.inPathIndices);
+    if (!out.oldMerkleRoot || toBig(out.oldMerkleRoot) !== derivedOldRoot) {
+      console.log("• Setting oldMerkleRoot ->", derivedOldRoot.toString());
+      out.oldMerkleRoot = dec(derivedOldRoot);
+    }
   }
 
   if (circuitName === "transfer") {
@@ -103,17 +154,17 @@ async function preprocessInput(circuitName, input) {
       delete out.out2SenderCipherPayPubKey;
     }
 
-    // --- normalize arrays (depth = 16) ---
-    out.inPathElements = ensureArray(out.inPathElements, 16, "0").map(String);
-    out.inPathIndices = booleanize(out.inPathIndices, 16);
+    const DEPTH = Number(out.depth || process.env.CP_TREE_DEPTH || 16);
+    // --- normalize arrays ---
+    out.inPathElements = ensureArray(out.inPathElements, DEPTH, "0").map(String);
+    out.inPathIndices = booleanize(out.inPathIndices, DEPTH);
 
-    out.out1PathElements = ensureArray(out.out1PathElements, 16, "0").map(String);
-    out.out2PathElements = ensureArray(out.out2PathElements, 16, "0").map(String);
+    out.out1PathElements = ensureArray(out.out1PathElements, DEPTH, "0").map(String);
+    out.out2PathElements = ensureArray(out.out2PathElements, DEPTH, "0").map(String);
 
     out.nextLeafIndex = dec(toBig(out.nextLeafIndex));
 
     // --- derive outCommitment1/2 off-chain (mirror NoteCommitment preimage) ---
-    // Assumed: Poseidon(amount, cipherPayPubKey, randomness, tokenId, memo)
     const nc = (amount, cpk, rand, tokenId, memo) =>
       H(toBig(amount), toBig(cpk), toBig(rand), toBig(tokenId), toBig(memo));
 
@@ -147,15 +198,17 @@ async function preprocessInput(circuitName, input) {
   }
 
   if (circuitName === "withdraw") {
-    // normalize path arrays (depth = 16)
-    out.pathElements = ensureArray(out.pathElements, 16, "0").map(String);
-    out.pathIndices = booleanize(out.pathIndices, 16);
+    const DEPTH = Number(out.depth || process.env.CP_TREE_DEPTH || 16);
+
+    // normalize path arrays
+    out.pathElements = ensureArray(out.pathElements, DEPTH, "0").map(String);
+    out.pathIndices = booleanize(out.pathIndices, DEPTH);
 
     // Reconstruct recipientCipherPayPubKey the same way as the circuit:
-    // Poseidon(recipientWalletPubKey, recipientWalletPrivKey)
+    const { H: H2 } = await getPoseidonClassic();
     const rPub = toBig(out.recipientWalletPubKey);
     const rPriv = toBig(out.recipientWalletPrivKey);
-    const recipientCipherPayPubKey = H(rPub, rPriv);
+    const recipientCipherPayPubKey = H2(rPub, rPriv);
 
     // NoteCommitment preimage: (amount, cipherPayPubKey, randomness, tokenId, memo)
     const amount = toBig(out.amount);
@@ -163,13 +216,7 @@ async function preprocessInput(circuitName, input) {
     const randomness = toBig(out.randomness);
     const memo = toBig(out.memo);
 
-    const expectedCommitment = H(
-      amount,
-      recipientCipherPayPubKey,
-      randomness,
-      tokenId,
-      memo
-    );
+    const expectedCommitment = H2(amount, recipientCipherPayPubKey, randomness, tokenId, memo);
 
     if (!out.commitment || toBig(out.commitment) !== expectedCommitment) {
       console.log("• (withdraw) Setting private commitment ->", expectedCommitment.toString());
@@ -186,7 +233,7 @@ async function generateProof(circuitName, input) {
 
   const buildPath = path.join(__dirname, `../build/${circuitName}`);
   const wasmPath = path.join(buildPath, `${circuitName}_js/${circuitName}.wasm`);
-  const zkeyPath = path.join(buildPath, `${circuitName}.zkey`);
+  const zkeyPath = path.join(buildPath, `${circuitName}_final.zkey`);
 
   if (!fs.existsSync(wasmPath)) {
     throw new Error(`WASM file not found at ${wasmPath}. Please run setup.js first.`);
@@ -198,11 +245,7 @@ async function generateProof(circuitName, input) {
   const prepared = await preprocessInput(circuitName, input);
 
   console.log("Generating proof...");
-  const { proof, publicSignals } = await snarkjs.groth16.fullProve(
-    prepared,
-    wasmPath,
-    zkeyPath
-  );
+  const { proof, publicSignals } = await snarkjs.groth16.fullProve(prepared, wasmPath, zkeyPath);
 
   // save artifacts
   fs.mkdirSync(buildPath, { recursive: true });
@@ -216,14 +259,9 @@ async function generateProof(circuitName, input) {
   if (labels && labels.length === publicSignals.length) {
     const labeled = {};
     for (let i = 0; i < labels.length; i++) labeled[labels[i]] = publicSignals[i];
-    fs.writeFileSync(
-      path.join(buildPath, "public_signals_labeled.json"),
-      JSON.stringify(labeled, null, 2)
-    );
+    fs.writeFileSync(path.join(buildPath, "public_signals_labeled.json"), JSON.stringify(labeled, null, 2));
     console.log("Public signals (labeled):");
-    for (let i = 0; i < labels.length; i++) {
-      console.log(`  ${labels[i]} = ${publicSignals[i]}`);
-    }
+    for (let i = 0; i < labels.length; i++) console.log(`  ${labels[i]} = ${publicSignals[i]}`);
   } else {
     console.log(`Public signals (${publicSignals.length}): ${publicSignals.join(", ")}`);
   }
@@ -241,8 +279,7 @@ const exampleInputs = {
       "1234567890123456789012345678901234567890123456789012345678901234",
     inSenderWalletPrivKey:
       "1111111111111111111111111111111111111111111111111111111111111111",
-    inRandomness:
-      "9876543210987654321098765432109876543210987654321098765432109876",
+    inRandomness: "9876543210987654321098765432109876543210987654321098765432109876",
     inTokenId: "1",
     inMemo: "0",
 
@@ -254,8 +291,7 @@ const exampleInputs = {
     out1Amount: "60",
     out1RecipientCipherPayPubKey:
       "2222222222222222222222222222222222222222222222222222222222222222",
-    out1Randomness:
-      "4444444444444444444444444444444444444444444444444444444444444444",
+    out1Randomness: "4444444444444444444444444444444444444444444444444444444444444444",
     out1TokenId: "1",
     out1Memo: "0",
 
@@ -263,8 +299,7 @@ const exampleInputs = {
     out2Amount: "40",
     out2RecipientCipherPayPubKey:
       "5555555555555555555555555555555555555555555555555555555555555555",
-    out2Randomness:
-      "7777777777777777777777777777777777777777777777777777777777777777",
+    out2Randomness: "7777777777777777777777777777777777777777777777777777777777777777",
     out2TokenId: "1",
     out2Memo: "0",
 
@@ -281,8 +316,7 @@ const exampleInputs = {
   withdraw: {
     recipientWalletPrivKey:
       "1111111111111111111111111111111111111111111111111111111111111111",
-    randomness:
-      "9876543210987654321098765432109876543210987654321098765432109876",
+    randomness: "9876543210987654321098765432109876543210987654321098765432109876",
     memo: "0",
     pathElements: Array(16).fill("0"),
     pathIndices: Array(16).fill(0),
@@ -293,22 +327,30 @@ const exampleInputs = {
     amount: "100",
     tokenId: "1",
 
-    // Private input (optional here; will be auto-derived if missing/mismatched)
-    // commitment: "..."
+    // Private input (optional; will be auto-derived if missing/mismatched)
+    // commitment: "...",
   },
 
   deposit: {
+    // Private preimage parts for the commitment + key-derivation
     ownerWalletPubKey: "0",
     ownerWalletPrivKey: "0",
     randomness: "0",
     tokenId: "0",
     memo: "0",
-    inPathElements: Array(16).fill("0"),
-    inPathIndices: Array(16).fill(0),
+
+    // Merkle path to the EMPTY slot at nextLeafIndex (bottom→top)
+    inPathElements: Array(16).fill("0"), // will be replaced with z[i]
+    inPathIndices: Array(16).fill(0),    // will be recomputed from nextLeafIndex
     nextLeafIndex: "0",
+
+    // Binding
     nonce: "0",
     amount: "100",
-    // depositHash will be derived automatically
+
+    // Public input (auto-derived if omitted/mismatch)
+    // oldMerkleRoot: "...",
+    // depositHash: "...",
   },
 };
 
@@ -318,7 +360,7 @@ async function main() {
   const circuitName = args[0];
 
   if (!circuitName) {
-    console.log("Usage: node generate-proof.js <circuit-name> [-i input.json]");
+    console.log("Usage: node generate-example-proof.js <circuit-name> [-i input.json]");
     console.log("Available circuits:", Object.keys(exampleInputs).join(", "));
     process.exit(1);
   }
@@ -350,8 +392,10 @@ async function main() {
     console.error("❌ Proof generation failed:", err.message || err);
     console.error(
       "   Hints:\n" +
-        "    • transfer: encNote1/2 hashes are auto-derived; ensure arrays are length 16 and indices are 0/1.\n" +
-        "    • deposit: depositHash must equal Poseidon(ownerCipherPayPubKey, amount, nonce).\n" +
+        "    • deposit: inPathElements must be per-level zeros z[i] and indices from nextLeafIndex.\n" +
+        "    • deposit: oldMerkleRoot is recomputed as H path from leaf=0.\n" +
+        "    • deposit: depositHash = Poseidon(ownerCipherPayPubKey, amount, nonce).\n" +
+        "    • transfer: encNote1/2 hashes are auto-derived; ensure arrays are depth-length and indices are 0/1.\n" +
         "    • withdraw: commitment is PRIVATE and auto-derived from (amount, recipient keys, randomness, tokenId, memo)."
     );
     process.exit(1);
@@ -360,4 +404,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { generateProof, preprocessInput, exampleInputs };
+module.exports = { generateProof, preprocessInput, exampleInputs, computeZeros, indicesFromIndex };

@@ -28,9 +28,9 @@ const FQ = BigInt("2188824287183927522224640574525727508854836440041603434369820
 const CLI = {
   in: null,
   out: null,
-  batch: false,
+  all: false,
   includeAlphaBeta: false,
-  endianness: "le",   // "le" | "be"
+  endianness: "be",   // "le" | "be"
   icOverride: null,   // number | null  (forces expected IC length = icOverride+1)
   force: false,       // bypass hard checks (still warns)
 };
@@ -250,12 +250,12 @@ Options:
   --include-alphabeta      Include vk_alphabeta_12 if present (default: off)
   --ic=<nPublic>           Override nPublic (IC must then be nPublic+1)
   --force                  Do not abort on IC length mismatch; print warning instead
-  --batch                  Convert ./build/{deposit,transfer,withdraw}/verification_key.json
+  --all                  Convert ./build/{deposit,transfer,withdraw}/verification_key.json
                            to ../cipherpay-anchor/src/zk_verifier/{circuit}_vk.bin
 Examples:
   node scripts/convert-vk-to-bin.js -i build/deposit/verification_key.json -o ../cipherpay-anchor/src/zk_verifier/deposit_vk.bin
   node scripts/convert-vk-to-bin.js -i vk.json -o vk.bin --endianness=le --ic=6
-  node scripts/convert-vk-to-bin.js --batch
+  node scripts/convert-vk-to-bin.js --all
 `);
 }
 
@@ -269,7 +269,7 @@ function parseArgs(argv) {
     return v ?? null;
   };
 
-  CLI.batch = a.includes("--batch");
+  CLI.all = a.includes("--all");
   CLI.includeAlphaBeta = a.includes("--include-alphabeta");
   CLI.force = a.includes("--force");
 
@@ -286,8 +286,8 @@ function parseArgs(argv) {
     CLI.icOverride = n;
   }
 
-  // -i and -o only in non-batch mode
-  if (!CLI.batch) {
+  // -i and -o only in non-all mode
+  if (!CLI.all) {
     const iPos = a.indexOf("-i");
     const oPos = a.indexOf("-o");
     const iVal = iPos !== -1 ? a[iPos + 1] : null;
@@ -300,7 +300,7 @@ function parseArgs(argv) {
 function main() {
   parseArgs(process.argv);
 
-  if (!CLI.batch) {
+  if (!CLI.all) {
     if (!CLI.in || !CLI.out) {
       printHelp();
       process.exit(1);
@@ -317,7 +317,7 @@ function main() {
     return;
   }
 
-  // Batch mode (deposit/transfer/withdraw)
+  // All mode (deposit/transfer/withdraw)
   const circuits = ["deposit", "transfer", "withdraw"];
   const buildDir = path.join(__dirname, "..", "build");
   const outDir = path.join(__dirname, "..", "..", "cipherpay-anchor", "src", "zk_verifier");

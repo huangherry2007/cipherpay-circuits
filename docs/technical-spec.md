@@ -25,12 +25,37 @@ CipherPay uses Circom 2.1.4 to implement the following core circuits:
 
 ## Circuit Specifications
 
+### Deposit Circuit
+
+**Purpose**: Converts public funds to shielded notes with Merkle tree integration.
+
+**Input Signals** (6 total):
+- **Private Inputs** (5):
+  - `ownerWalletPubKey`: Owner's wallet public key
+  - `ownerWalletPrivKey`: Owner's wallet private key
+  - `randomness`: Note randomness
+  - `tokenId`: Token identifier
+  - `memo`: Optional memo
+  - `inPathElements[16]`: Merkle path elements
+  - `inPathIndices[16]`: Merkle path indices
+  - `nextLeafIndex`: Current next leaf index
+- **Public Inputs** (3):
+  - `nonce`: Binds depositHash
+  - `amount`: Public amount
+  - `depositHash`: Poseidon(ownerCipherPayPubKey, amount, nonce)
+
+**Output Signals** (4):
+- `newCommitment`: Shielded note commitment
+- `ownerCipherPayPubKey`: Derived CipherPay identity
+- `newMerkleRoot`: New Merkle root after adding commitment
+- `newNextLeafIndex`: Next leaf index after insertion
+
 ### Transfer Circuit
 
 **Purpose**: Enables shielded transfers between users with encrypted note delivery.
 
-**Input Signals** (19 total):
-- **Private Inputs** (18):
+**Input Signals** (9 total):
+- **Private Inputs** (7):
   - `inAmount`: Input note amount
   - `inSenderWalletPubKey`: Sender's wallet public key
   - `inSenderWalletPrivKey`: Sender's wallet private key
@@ -49,72 +74,24 @@ CipherPay uses Circom 2.1.4 to implement the following core circuits:
   - `out2Randomness`: Change note randomness
   - `out2TokenId`: Change note token ID
   - `out2Memo`: Change note memo
-- **Public Inputs** (1):
-  - `encryptedNote`: Encrypted note data for recipient
+- **Public Inputs** (2):
+  - `encNote1Hash`: Encrypted note hash for recipient
+  - `encNote2Hash`: Encrypted note hash for sender
 
-**Output Signals** (5):
-- `inCommitment`: Input note commitment
+**Output Signals** (7):
 - `outCommitment1`: Recipient note commitment
 - `outCommitment2`: Change note commitment
 - `nullifier`: Nullifier to prevent double-spending
-- `merkleRoot`: Updated Merkle root
+- `merkleRoot`: Current Merkle root
+- `newMerkleRoot1`: New Merkle root after first update
+- `newMerkleRoot2`: New Merkle root after second update
+- `newNextLeafIndex`: Next leaf index after updates
 
 **Key Features**:
 - Amount conservation: `inAmount === out1Amount + out2Amount`
 - Token consistency: All notes use same token ID
 - Encrypted note delivery for recipient privacy
 - Merkle tree inclusion proof verification
-
-### Deposit Circuit
-
-**Purpose**: Converts public funds to shielded notes with privacy-enhanced binding.
-
-**Input Signals** (8 total):
-- **Private Inputs** (5):
-  - `ownerWalletPubKey`: Owner's wallet public key
-  - `ownerWalletPrivKey`: Owner's wallet private key
-  - `randomness`: Note randomness
-  - `tokenId`: Token identifier
-  - `memo`: Optional memo
-- **Public Inputs** (3):
-  - `nonce`: Unique deposit nonce
-  - `amount`: Deposit amount
-  - `depositHash`: Hash binding owner identity to deposit
-
-**Output Signals** (2):
-- `newCommitment`: New shielded note commitment
-- `ownerCipherPayPubKey`: Derived CipherPay identity
-
-**Key Features**:
-- Privacy-enhanced deposit hash using `ownerCipherPayPubKey`
-- Unique nonce prevents hash collisions
-- Wallet-bound identity derivation
-
-### Withdraw Circuit
-
-**Purpose**: Converts shielded notes to public funds with identity verification.
-
-**Input Signals** (9 total):
-- **Private Inputs** (5):
-  - `recipientWalletPrivKey`: Recipient's wallet private key
-  - `randomness`: Note randomness
-  - `memo`: Optional memo
-  - `pathElements[16]`: Merkle path elements
-  - `pathIndices[16]`: Merkle path indices
-- **Public Inputs** (4):
-  - `recipientWalletPubKey`: Recipient's wallet public key
-  - `amount`: Withdrawal amount
-  - `tokenId`: Token identifier
-  - `commitment`: Note commitment for verification
-
-**Output Signals** (2):
-- `nullifier`: Nullifier to prevent double-spending
-- `merkleRoot`: Updated Merkle root
-
-**Key Features**:
-- Merkle tree inclusion proof verification
-- Commitment reconstruction and validation
-- Wallet-bound identity verification
 
 ### Note Commitment Component
 
