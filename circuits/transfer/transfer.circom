@@ -1,5 +1,5 @@
 pragma circom 2.1.4;
-
+// circuits/transfer/transfer.circom
 include "circomlib/circuits/poseidon.circom";
 include "circomlib/circuits/bitify.circom";      // Num2Bits
 include "../merkle/merkle.circom";               // MerkleProof(depth)
