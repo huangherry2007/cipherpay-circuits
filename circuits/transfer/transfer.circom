@@ -1,5 +1,5 @@
-pragma circom 2.1.4;
-// circuits/transfer/transfer.circom
+pragma circom 2.1.6;
+
 include "circomlib/circuits/poseidon.circom";
 include "circomlib/circuits/bitify.circom";      // Num2Bits
 include "../merkle/merkle.circom";               // MerkleProof(depth)
@@ -143,7 +143,7 @@ template Transfer(depth) {
     nextIdx1 <== nextLeafIndex + 1;
 
     component bits2 = Num2Bits(depth);
-    bits2.in <== nextIdx1;                  // enforces nextLeafIndex + 1 < 2^depth
+    bits2.in <== nextIdx1;
 
     signal cur2[depth + 1];
     cur2[0] <== outCommitment2;
@@ -154,16 +154,14 @@ template Transfer(depth) {
 
     // Parity of nextLeafIndex (LSB from insertion #1 bits)
     signal b1;
-    b1 <== bits1.out[0]; // boolean
+    b1 <== bits1.out[0];
 
-    // Safe level-0 sibling selection via assignments (quadratic only):
-    // sib0 = outCommitment1 + b1 * (out2PathElements[0] - outCommitment1)
+    // Level 0: sibling is either outCommitment1 (if LSB=0) or out2PathElements[0] (if LSB=1)
     signal t0;
     t0   <== out2PathElements[0] - outCommitment1;
     signal sib0;
     sib0 <== outCommitment1 + b1 * t0;
 
-    // Level 0 using sib0 and bits2
     left2[0]  <== bits2.out[0] * (sib0 - cur2[0]) + cur2[0];
     right2[0] <== bits2.out[0] * (cur2[0] - sib0) + sib0;
 
@@ -172,8 +170,20 @@ template Transfer(depth) {
     H2[0].inputs[1] <== right2[0];
     cur2[1] <== H2[0].out;
 
-    // Levels 1..depth-1 use provided pre-insertion siblings
-    for (var k = 1; k < depth; k++) {
+    // ✅ Level 1 MUST reflect out1 already inserted.
+    signal sib1;
+    sib1 <== cur1[1];                           // H(leaf0, leaf1) from step 7
+
+    left2[1]  <== bits2.out[1] * (sib1 - cur2[1]) + cur2[1];
+    right2[1] <== bits2.out[1] * (cur2[1] - sib1) + sib1;
+
+    H2[1] = Poseidon(2);
+    H2[1].inputs[0] <== left2[1];
+    H2[1].inputs[1] <== right2[1];
+    cur2[2] <== H2[1].out;
+
+    // 🔁 Levels 2..depth-1: use PRE-INSERTION siblings unchanged
+    for (var k = 2; k < depth; k++) {
         left2[k]  <== bits2.out[k] * (out2PathElements[k] - cur2[k]) + cur2[k];
         right2[k] <== bits2.out[k] * (cur2[k] - out2PathElements[k]) + out2PathElements[k];
 
@@ -182,7 +192,8 @@ template Transfer(depth) {
         H2[k].inputs[1] <== right2[k];
         cur2[k + 1] <== H2[k].out;
     }
-    newMerkleRoot2 <== cur2[depth];
+
+newMerkleRoot2 <== cur2[depth];
 
     // final next index after two insertions
     newNextLeafIndex <== nextLeafIndex + 2;

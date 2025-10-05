@@ -8,7 +8,36 @@ function sh(cmd, opts = {}) {
   execSync(cmd, { stdio: 'inherit', ...opts });
 }
 
+/* ---- MINIMAL ADD: resolve a Circom v2 binary (prefer global over node_modules) ---- */
+function resolveCircomBin() {
+  // 1) honor explicit env override
+  if (process.env.CIRCOM_BIN) return process.env.CIRCOM_BIN;
+
+  const candidates = [];
+  // 2) try shell’s circom (may be npm’s under npm run, we’ll version-check)
+  try { candidates.push(execSync('command -v circom', { encoding: 'utf8' }).trim()); } catch {}
+  // 3) common global locations
+  ['/usr/local/bin/circom','/opt/homebrew/bin/circom','/usr/bin/circom'].forEach(p => {
+    if (fs.existsSync(p)) candidates.push(p);
+  });
+
+  for (const bin of candidates) {
+    try {
+      const v = execSync(`"${bin}" --version`, { encoding: 'utf8' }).toLowerCase();
+      if (v.includes('compiler 2.')) return bin; // Circom v2.x
+    } catch {}
+  }
+  // fallback (may still work if the local one is v2)
+  return 'circom';
+}
+
 async function setupCircuits() {
+  // --- recommend Node 18 (or 22) to avoid snarkjs CLI exit issue on Node 20 ---
+  const major = parseInt(process.versions.node.split('.')[0], 10);
+  if (major !== 18 && major !== 22) {
+    console.warn(`⚠️  Detected Node ${process.version}. For snarkjs CLI stability, use Node 18 (LTS) or 22 (LTS).`);
+  }
+
   console.log('🔧 Setting up CipherPay Circuits...');
 
   const circuits = ['transfer', 'withdraw', 'deposit'];
@@ -32,6 +61,15 @@ async function setupCircuits() {
     console.log(`✅ ptau ready at ${path.relative(repoRoot, ptauFinal)}`);
   }
 
+  // --- MINIMAL ADD: pick the compiler once and reuse ---
+  const CIRCOM = resolveCircomBin();
+  try {
+    const v = execSync(`"${CIRCOM}" --version`, { encoding: 'utf8' }).trim();
+    console.log(`🧭 Using circom: ${CIRCOM} (${v})`);
+  } catch {
+    console.log(`🧭 Using circom: ${CIRCOM}`);
+  }
+
   // 2) Compile & build each circuit
   for (const circuitName of circuits) {
     console.log(`\n📦 Building ${circuitName} circuit...`);
@@ -42,7 +80,8 @@ async function setupCircuits() {
 
     // 2a) circom compile -> r1cs + wasm
     console.log(`  🧱 Compiling ${circuitName}...`);
-    sh(`circom "${circuitPath}" --r1cs --wasm --output "${circuitBuildDir}" -l node_modules`, {
+    // MINIMAL CHANGE: use the resolved binary instead of bare "circom"
+    sh(`"${CIRCOM}" "${circuitPath}" --r1cs --wasm --output "${circuitBuildDir}" -l node_modules`, {
       cwd: repoRoot,
     });
     console.log(`  ✅ ${circuitName} compiled`);

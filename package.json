@@ -4,21 +4,10 @@
   "description": "Zero-knowledge proof circuits for privacy-preserving payments with wallet-bound identities",
   "main": "index.js",
   "scripts": {
-    "test": "jest",
-    "test:timeout": "jest --testTimeout=30000",
-    "test:verbose": "jest --verbose",
-    "test:coverage": "jest --coverage",
     "setup": "node scripts/setup.js",
-    "generate-proof": "node scripts/generate-proof.js",
-    "build:transfer": "circom circuits/transfer/transfer.circom --r1cs --wasm --sym -o build/transfer -l node_modules",
-    "build:deposit": "circom circuits/deposit/deposit.circom --r1cs --wasm --sym -o build/deposit -l node_modules",
-    "build:withdraw": "circom circuits/withdraw/withdraw.circom --r1cs --wasm --sym -o build/withdraw -l node_modules",
-    "build:note-commitment": "circom circuits/note_commitment/note_commitment.circom --r1cs --wasm --sym -o build/note_commitment -l node_modules",
-    "build:nullifier": "circom circuits/nullifier/nullifier.circom --r1cs --wasm --sym -o build/nullifier -l node_modules",
-    "build:core": "npm run build:transfer && npm run build:deposit && npm run build:withdraw",
-    "build:components": "npm run build:note-commitment && npm run build:nullifier",
-    "build:all": "npm run build:core && npm run build:components",
-    "convert-vk": "node scripts/convert-vk-to-binary.js",
+    "generate-proof": "node scripts/generate-example-proof.js",
+    "generate-bin-proofs": "node scripts/generate-bin-proofs.js",
+    "convert-vk": "node scripts/convert-vk-to-bin.js",
     "clean": "rm -rf build/",
     "clean:all": "rm -rf build/ node_modules/ package-lock.json"
   },
@@ -50,8 +39,9 @@
   "dependencies": {
     "circom": "^0.5.46",
     "circomlib": "^2.0.5",
-    "circomlibjs": "0.1.7",
-    "snarkjs": "0.6.11"
+    "circomlibjs": "^0.1.7",
+    "dotenv": "^17.2.3",
+    "snarkjs": "^0.6.11"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
