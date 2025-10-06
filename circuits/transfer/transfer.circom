@@ -152,15 +152,15 @@ template Transfer(depth) {
     signal right2[depth];
     component H2[depth];
 
-    // Parity of nextLeafIndex (LSB from insertion #1 bits)
-    signal b1;
-    b1 <== bits1.out[0];
+    // LSB of nextLeafIndex (did we share a parent at L0?)
+    signal b0;
+    b0 <== bits1.out[0];
 
-    // Level 0: sibling is either outCommitment1 (if LSB=0) or out2PathElements[0] (if LSB=1)
+    // Level 0: sibling is either out1 (if nextLeafIndex even) or pre-insertion leaf3 (if odd)
     signal t0;
     t0   <== out2PathElements[0] - outCommitment1;
     signal sib0;
-    sib0 <== outCommitment1 + b1 * t0;
+    sib0 <== outCommitment1 + b0 * t0;
 
     left2[0]  <== bits2.out[0] * (sib0 - cur2[0]) + cur2[0];
     right2[0] <== bits2.out[0] * (cur2[0] - sib0) + sib0;
@@ -170,22 +170,25 @@ template Transfer(depth) {
     H2[0].inputs[1] <== right2[0];
     cur2[1] <== H2[0].out;
 
-    // ✅ Level 1 MUST reflect out1 already inserted.
-    signal sib1;
-    sib1 <== cur1[1];                           // H(leaf0, leaf1) from step 7
+    // Generic levels k >= 1:
+    // replace_k = (all lower bits of nextLeafIndex are 1) * (this bit is 0)
+    // If replace_k==1, the "other half" for out2 at level k is precisely the subtree updated by out1,
+    // so we must use cur1[k]. Otherwise keep the pre-insertion sibling.
+    signal carry[depth];       // carry[k] = product(bits1[0..k-1])
+    signal replaceK[depth];    // replace flag per level
+    signal sibK[depth];        // chosen sibling per level
 
-    left2[1]  <== bits2.out[1] * (sib1 - cur2[1]) + cur2[1];
-    right2[1] <== bits2.out[1] * (cur2[1] - sib1) + sib1;
+    carry[0] <== 1;
+    for (var k = 1; k < depth; k++) {
+        carry[k]    <== carry[k-1] * bits1.out[k-1];
+        replaceK[k] <== carry[k] * (1 - bits1.out[k]);
 
-    H2[1] = Poseidon(2);
-    H2[1].inputs[0] <== left2[1];
-    H2[1].inputs[1] <== right2[1];
-    cur2[2] <== H2[1].out;
+        // sibK = out2PathElements[k]  (pre)  if replaceK==0
+        //      = cur1[k]              (post) if replaceK==1
+        sibK[k] <== out2PathElements[k] + replaceK[k] * (cur1[k] - out2PathElements[k]);
 
-    // 🔁 Levels 2..depth-1: use PRE-INSERTION siblings unchanged
-    for (var k = 2; k < depth; k++) {
-        left2[k]  <== bits2.out[k] * (out2PathElements[k] - cur2[k]) + cur2[k];
-        right2[k] <== bits2.out[k] * (cur2[k] - out2PathElements[k]) + out2PathElements[k];
+        left2[k]  <== bits2.out[k] * (sibK[k] - cur2[k]) + cur2[k];
+        right2[k] <== bits2.out[k] * (cur2[k] - sibK[k]) + sibK[k];
 
         H2[k] = Poseidon(2);
         H2[k].inputs[0] <== left2[k];
@@ -193,7 +196,7 @@ template Transfer(depth) {
         cur2[k + 1] <== H2[k].out;
     }
 
-newMerkleRoot2 <== cur2[depth];
+    newMerkleRoot2 <== cur2[depth];
 
     // final next index after two insertions
     newNextLeafIndex <== nextLeafIndex + 2;
