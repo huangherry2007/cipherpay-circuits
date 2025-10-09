@@ -5,9 +5,9 @@
   "main": "index.js",
   "scripts": {
     "setup": "node scripts/setup.js",
-    "generate-proof": "node scripts/generate-example-proof.js",
-    "generate-bin-proofs": "node scripts/generate-bin-proofs.js",
-    "convert-vk": "node scripts/convert-vk-to-bin.js",
+    "generate-proof": "node scripts/generate-example-proof.js all",
+    "generate-bin-proofs": "node scripts/generate-bin-proofs.js --all",
+    "convert-vk": "node scripts/convert-vk-to-bin.js --all",
     "clean": "rm -rf build/",
     "clean:all": "rm -rf build/ node_modules/ package-lock.json"
   },

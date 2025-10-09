@@ -209,12 +209,12 @@ const exampleInputs = {
           out2Memo: "0",
         },
       
-        withdraw2: {
+        withdraw3: {
           recipientWalletPubKey:
             "1234567890123456789012345678901234567890123456789012345678901234",
           recipientWalletPrivKey:
             "1111111111111111111111111111111111111111111111111111111111111111",
-          amount: "120",
+          amount: "160",
           tokenId: "0",
           randomness:
             "33333333333333333333333333333333333333333333333333333333333333333",
