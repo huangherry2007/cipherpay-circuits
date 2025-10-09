@@ -123,9 +123,50 @@ function ensureDir(d) {
   fs.mkdirSync(d, { recursive: true });
 }
 
-/* ------------------------------ main logic ------------------------------ */
-const CIRCUITS = ["deposit", "transfer", "withdraw"];
+/* ---------------------------- labels/printing --------------------------- */
+const LABELS = {
+  deposit: [
+    "newCommitment",
+    "ownerCipherPayPubKey",
+    "newMerkleRoot",
+    "newNextLeafIndex",
+    "amount",
+    "depositHash",
+    "oldMerkleRoot",
+  ],
+  transfer: [
+    "outCommitment1",
+    "outCommitment2",
+    "nullifier",
+    "merkleRoot",
+    "newMerkleRoot1",
+    "newMerkleRoot2",
+    "newNextLeafIndex",
+    "encNote1Hash",
+    "encNote2Hash",
+  ],
+  withdraw: ["nullifier", "merkleRoot", "recipientWalletPubKey", "amount", "tokenId"],
+};
+const baseName = (c) => c.replace(/\d+$/, "");
 
+function printLabeledIfKnown(circuit, publicSignals) {
+  const labels = LABELS[baseName(circuit)];
+  if (labels && labels.length === publicSignals.length) {
+    console.log("🔎 Public signals (labeled):");
+    labels.forEach((k, i) => console.log(`  ${k} = ${publicSignals[i]}`));
+  } else {
+    console.log(`🔎 Public signals: ${publicSignals.join(", ")}`);
+    if (labels) {
+      console.warn(
+        `⚠️  Expected ${labels.length} signals for '${baseName(
+          circuit
+        )}', got ${publicSignals.length}. ` + "Double-check your circuit's public ordering."
+      );
+    }
+  }
+}
+
+/* ------------------------------ path helpers ---------------------------- */
 function resolveInPaths(buildRoot, circuit) {
   const dir = path.join(buildRoot, circuit);
   return {
@@ -136,7 +177,7 @@ function resolveInPaths(buildRoot, circuit) {
 }
 
 function resolveOutPaths(outRoot, circuit) {
-  const dir = outRoot;
+  const dir = outRoot; // flat output; filenames include suffix if present
   ensureDir(dir);
   return {
     proofBin: path.join(dir, `${circuit}_proof.bin`),
@@ -145,45 +186,7 @@ function resolveOutPaths(outRoot, circuit) {
   };
 }
 
-function printLabeledIfKnown(circuit, publicSignals) {
-  const LABELS = {
-    deposit: [
-      "newCommitment",
-      "ownerCipherPayPubKey",
-      "newMerkleRoot",
-      "newNextLeafIndex",
-      "amount",
-      "depositHash",
-      "oldMerkleRoot",
-    ],
-    transfer: [
-      "outCommitment1",
-      "outCommitment2",
-      "nullifier",
-      "merkleRoot",
-      "newMerkleRoot1",
-      "newMerkleRoot2",
-      "newNextLeafIndex",
-      "encNote1Hash",
-      "encNote2Hash",
-    ],
-    withdraw: ["nullifier", "merkleRoot", "recipientWalletPubKey", "amount", "tokenId"],
-  };
-  const labels = LABELS[circuit];
-  if (labels && labels.length === publicSignals.length) {
-    console.log("🔎 Public signals (labeled):");
-    labels.forEach((k, i) => console.log(`  ${k} = ${publicSignals[i]}`));
-  } else {
-    console.log(`🔎 Public signals: ${publicSignals.join(", ")}`);
-    if (labels) {
-      console.warn(
-        `⚠️  Expected ${labels.length} signals for '${circuit}', got ${publicSignals.length}. ` +
-          "Double-check your circuit's public ordering."
-      );
-    }
-  }
-}
-
+/* ------------------------------ converters ------------------------------ */
 async function convertOne({ circuit, inDir, outDir }) {
   const buildRoot = path.resolve(inDir);
   const outRoot = path.resolve(outDir);
@@ -209,8 +212,12 @@ async function convertOne({ circuit, inDir, outDir }) {
   // logs
   console.log("✅ Converted!");
   console.log(`  • Proof (256B): ${OUT.proofBin}`);
-  console.log(`  • Publics (${publicSignals.length} × 32B = ${pubsBin.length}B): ${OUT.publicsBin}`);
-  console.log(`  • Payload (${payloadBin.length}B = 256 + 32×${publicSignals.length}): ${OUT.payloadBin}`);
+  console.log(
+    `  • Publics (${publicSignals.length} × 32B = ${pubsBin.length}B): ${OUT.publicsBin}`
+  );
+  console.log(
+    `  • Payload (${payloadBin.length}B = 256 + 32×${publicSignals.length}): ${OUT.payloadBin}`
+  );
   printLabeledIfKnown(circuit, publicSignals);
 
   return {
@@ -222,9 +229,9 @@ async function convertOne({ circuit, inDir, outDir }) {
   };
 }
 
-async function convertAll({ inDir, outDir }) {
+async function convertMany({ circuits, inDir, outDir }) {
   const results = [];
-  for (const circuit of CIRCUITS) {
+  for (const circuit of circuits) {
     try {
       results.push(await convertOne({ circuit, inDir, outDir }));
     } catch (e) {
@@ -235,16 +242,38 @@ async function convertAll({ inDir, outDir }) {
   return results;
 }
 
+/* ------------------------------- circuit sets --------------------------- */
+// Pipelines A..D: suffix "" (A), "1" (B), "2" (C), "3" (D)
+const BASES = ["deposit", "transfer", "withdraw"];
+const SUFFIXES = ["", "1", "2", "3"];
+
+function circuitsForSuffix(sfx) {
+  return BASES.map((b) => b + sfx);
+}
+function allPipelineCircuits() {
+  return SUFFIXES.flatMap((sfx) => circuitsForSuffix(sfx));
+}
+
 /* ---------------------------------- CLI --------------------------------- */
 /*
 Usage examples:
+  # Convert all 12 circuits for pipelines A..D from build/* → ../cipherpay-anchor/proofs (or ./proofs)
   node scripts/generate-bin-proofs.js --all
-  node scripts/generate-bin-proofs.js transfer
-  node scripts/generate-bin-proofs.js withdraw --in build --out ../cipherpay-anchor/proofs
+
+  # Convert a specific circuit (supports suffixes):
+  node scripts/generate-bin-proofs.js transfer2
+
+  # Convert a whole pipeline (B only):
+  node scripts/generate-bin-proofs.js --pipeline=B
+
+  # Custom in/out directories:
+  node scripts/generate-bin-proofs.js --all --in=./build --out=../cipherpay-anchor/proofs
+
 Flags:
-  --in=<dir>    Input root (default: <repo>/build)
-  --out=<dir>   Output dir (default: <repo>/../cipherpay-anchor/proofs; falls back to <repo>/proofs if parent repo missing)
-  --all         Convert deposit, transfer, withdraw
+  --in=<dir>        Input root (default: <repo>/build)
+  --out=<dir>       Output dir (default: <repo>/../cipherpay-anchor/proofs, fallback <repo>/proofs)
+  --all             Convert all pipelines A..D (deposit/transfer/withdraw × 4)
+  --pipeline=A|B|C|D   Convert only the specified pipeline
 */
 if (require.main === module) {
   (async () => {
@@ -253,6 +282,7 @@ if (require.main === module) {
       const isAll = args.includes("--all");
       const inArg = args.find((a) => a.startsWith("--in="));
       const outArg = args.find((a) => a.startsWith("--out="));
+      const pipelineArg = args.find((a) => a.startsWith("--pipeline="));
       const repoRoot = path.join(__dirname, "..");
 
       const inDir = inArg ? inArg.split("=")[1] : path.join(repoRoot, "build");
@@ -264,25 +294,48 @@ if (require.main === module) {
       }
       const outDir = outArg ? outArg.split("=")[1] : defaultOut;
 
+      // If --all, do every pipeline A..D
       if (isAll) {
-        await convertAll({ inDir, outDir });
+        await convertMany({ circuits: allPipelineCircuits(), inDir, outDir });
         process.exit(0);
       }
 
-      const circuit = args[0] && !args[0].startsWith("--") ? args[0] : "deposit";
-      if (!CIRCUITS.includes(circuit)) {
-        throw new Error(`Unknown circuit '${circuit}'. Use one of: ${CIRCUITS.join(", ")}, or --all`);
+      // If --pipeline=*
+      if (pipelineArg) {
+        const p = pipelineArg.split("=")[1].toUpperCase();
+        const map = { A: "", B: "1", C: "2", D: "3" };
+        if (!(p in map)) throw new Error("Invalid --pipeline value. Use A, B, C, or D.");
+        const circuits = circuitsForSuffix(map[p]);
+        await convertMany({ circuits, inDir, outDir });
+        process.exit(0);
       }
 
-      await convertOne({ circuit, inDir, outDir });
+      // Otherwise, allow specific circuit names (space-separated), e.g. "deposit deposit1 transfer3"
+      const names = args.filter((a) => !a.startsWith("--"));
+      if (names.length === 0) {
+        // default single step = deposit (pipeline A)
+        await convertOne({ circuit: "deposit", inDir, outDir });
+        process.exit(0);
+      }
+
+      // validate each name
+      const validName = (n) => /^(deposit|transfer|withdraw)\d*$/.test(n);
+      const bad = names.find((n) => !validName(n));
+      if (bad) {
+        throw new Error(
+          `Unknown circuit '${bad}'. Use deposit|transfer|withdraw optionally with suffix 1|2|3, or --all / --pipeline=A|B|C|D.`
+        );
+      }
+
+      await convertMany({ circuits: names, inDir, outDir });
       process.exit(0);
     } catch (e) {
       console.error("❌ Error:", e.message || e);
       console.error(
         "   Hints:\n" +
-          "   • Make sure build/<circuit>/proof.json and public_signals.json exist (run your prover first).\n" +
+          "   • Ensure build/<circuit{,1,2,3}>/proof.json and public_signals.json exist (run your prover first).\n" +
           "   • Public signals are written in the exact Circom order (outputs first, then public inputs).\n" +
-          "   • Use --in and --out to customize directories."
+          "   • Use --pipeline=A|B|C|D to convert a single pipeline, or --all for A..D."
       );
       process.exit(1);
     }
@@ -292,7 +345,7 @@ if (require.main === module) {
 /* ------------------------------- exports -------------------------------- */
 module.exports = {
   convertOne,
-  convertAll,
+  convertMany,
   _internals: {
     convertProofToBinary,
     convertPublicSignalsToBinary,
