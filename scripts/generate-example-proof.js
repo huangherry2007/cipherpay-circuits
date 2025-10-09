@@ -1,33 +1,242 @@
+#!/usr/bin/env node
 /* eslint-disable no-console */
-const snarkjs = require("snarkjs");
+
+// JSON-only proof generation for:
+// Pipelines A..D on the SAME tree:
+//   A: deposit  -> transfer  -> withdraw
+//   B: deposit1 -> transfer1 -> withdraw1
+//   C: deposit2 -> transfer2 -> withdraw2
+//   D: deposit3 -> transfer3 -> withdraw3
+//
+// It also supports running any single step by name:
+//   node scripts/generate-example-proof.js deposit|transfer|withdraw|deposit1|...
+
+"use strict";
+
 const fs = require("fs");
 const path = require("path");
+const { groth16 } = require("snarkjs");
+const circomlib = require("circomlibjs");
 
-/* ---------------- tiny helpers ---------------- */
-const toBig = (x, d = 0n) => {
-  if (x === undefined || x === null) return d;
-  if (typeof x === "bigint") return x;
-  if (typeof x === "number") return BigInt(x);
-  if (typeof x === "string") {
-    const s = x.trim();
-    return s ? (s.startsWith("0x") || s.startsWith("0X") ? BigInt(s) : BigInt(s)) : d;
-  }
-  return d;
+/* ---------------- example inputs ---------------- */
+const exampleInputs = {
+  // -------- Pipeline A --------
+  deposit: {
+    ownerWalletPubKey: "0",
+    ownerWalletPrivKey: "0",
+    randomness: "0",
+    tokenId: "0",
+    memo: "0",
+    inPathElements: Array(16).fill("0"),
+    inPathIndices: Array(16).fill(0),
+    nextLeafIndex: "0",
+    nonce: "0",
+    amount: "100",
+  },
+
+  transfer: {
+    // input (the deposit note)
+    inAmount: "100",
+    inSenderWalletPubKey: "0",
+    inSenderWalletPrivKey: "0",
+    inRandomness: "0",
+    inTokenId: "0",
+    inMemo: "0",
+
+    // outputs (we later spend out2)
+    out1Amount: "60",
+    out1RecipientCipherPayPubKey:
+      "5555555555555555555555555555555555555555555555555555555555555555",
+    out1Randomness:
+      "4444444444444444444444444444444444444444444444444444444444444444",
+    out1TokenId: "0",
+    out1Memo: "0",
+
+    out2Amount: "40",
+    out2RecipientCipherPayPubKey:
+      "19671880629798928171529795066366940826437446602236033626838552573503527465966",
+    out2Randomness:
+      "7777777777777777777777777777777777777777777777777777777777777777",
+    out2TokenId: "0",
+    out2Memo: "0",
+  },
+
+  withdraw: {
+    recipientWalletPubKey:
+      "1234567890123456789012345678901234567890123456789012345678901234",
+    recipientWalletPrivKey:
+      "1111111111111111111111111111111111111111111111111111111111111111",
+    amount: "40",
+    tokenId: "0",
+    randomness:
+      "7777777777777777777777777777777777777777777777777777777777777777",
+    memo: "0",
+    pathElements: Array(16).fill("0"),
+    pathIndices: Array(16).fill(0),
+  },
+
+  // -------- Pipeline B --------
+  deposit1: {
+    ownerWalletPubKey: "0",
+    ownerWalletPrivKey: "0",
+    randomness: "1",
+    tokenId: "0",
+    memo: "0",
+    inPathElements: Array(16).fill("0"),
+    inPathIndices: Array(16).fill(0),
+    nextLeafIndex: "3",
+    nonce: "1",
+    amount: "200",
+  },
+
+  transfer1: {
+    inAmount: "200",
+    inSenderWalletPubKey: "0",
+    inSenderWalletPrivKey: "0",
+    inRandomness: "1",
+    inTokenId: "0",
+    inMemo: "0",
+
+    out1Amount: "120",
+    out1RecipientCipherPayPubKey:
+      "5555555555555555555555555555555555555555555555555555555555555555",
+    out1Randomness:
+      "8888888888888888888888888888888888888888888888888888888888888888",
+    out1TokenId: "0",
+    out1Memo: "0",
+
+    out2Amount: "80",
+    out2RecipientCipherPayPubKey:
+      "19671880629798928171529795066366940826437446602236033626838552573503527465966",
+    out2Randomness:
+      "9999999999999999999999999999999999999999999999999999999999999999",
+    out2TokenId: "0",
+    out2Memo: "0",
+  },
+
+  withdraw1: {
+    recipientWalletPubKey:
+      "1234567890123456789012345678901234567890123456789012345678901234",
+    recipientWalletPrivKey:
+      "1111111111111111111111111111111111111111111111111111111111111111",
+    amount: "80",
+    tokenId: "0",
+    randomness:
+      "9999999999999999999999999999999999999999999999999999999999999999",
+    memo: "0",
+    pathElements: Array(16).fill("0"),
+    pathIndices: Array(16).fill(0),
+  },
+  // -------- Pipeline C --------
+  deposit2: {
+    ownerWalletPubKey: "0",
+    ownerWalletPrivKey: "0",
+    randomness: "2",
+    tokenId: "0",
+    memo: "0",
+    inPathElements: Array(16).fill("0"),
+    inPathIndices: Array(16).fill(0),
+    nextLeafIndex: "6",
+    nonce: "2",
+    amount: "300",
+  },
+
+  transfer2: {
+    inAmount: "300",
+    inSenderWalletPubKey: "0",
+    inSenderWalletPrivKey: "0",
+    inRandomness: "2",
+    inTokenId: "0",
+    inMemo: "0",
+
+    out1Amount: "180",
+    out1RecipientCipherPayPubKey:
+      "5555555555555555555555555555555555555555555555555555555555555555",
+    out1Randomness:
+      "0000000000000000000000000000000000000000000000000000000000000000",
+    out1TokenId: "0",
+    out1Memo: "0",
+
+    out2Amount: "120",
+    out2RecipientCipherPayPubKey:
+      "19671880629798928171529795066366940826437446602236033626838552573503527465966",
+    out2Randomness:
+      "11111111111111111111111111111111111111111111111111111111111111111",
+    out2TokenId: "0",
+    out2Memo: "0",
+  },
+
+  withdraw2: {
+    recipientWalletPubKey:
+      "1234567890123456789012345678901234567890123456789012345678901234",
+    recipientWalletPrivKey:
+      "1111111111111111111111111111111111111111111111111111111111111111",
+    amount: "120",
+    tokenId: "0",
+    randomness:
+      "11111111111111111111111111111111111111111111111111111111111111111",
+    memo: "0",
+    pathElements: Array(16).fill("0"),
+    pathIndices: Array(16).fill(0),
+  },
+
+  // -------- Pipeline D --------
+  deposit3: {
+    ownerWalletPubKey: "0",
+    ownerWalletPrivKey: "0",
+    randomness: "3",
+    tokenId: "0",
+    memo: "0",
+    inPathElements: Array(16).fill("0"),
+    inPathIndices: Array(16).fill(0),
+    nextLeafIndex: "9",
+    nonce: "3",
+    amount: "400",
+  },
+
+  transfer3: {
+    inAmount: "400",
+    inSenderWalletPubKey: "0",
+    inSenderWalletPrivKey: "0",
+    inRandomness: "3",
+    inTokenId: "0",
+    inMemo: "0",
+
+    out1Amount: "240",
+    out1RecipientCipherPayPubKey:
+      "5555555555555555555555555555555555555555555555555555555555555555",
+    out1Randomness:
+      "2222222222222222222222222222222222222222222222222222222222222222",
+    out1TokenId: "0",
+    out1Memo: "0",
+
+    out2Amount: "160",
+    out2RecipientCipherPayPubKey:
+      "19671880629798928171529795066366940826437446602236033626838552573503527465966",
+    out2Randomness:
+      "33333333333333333333333333333333333333333333333333333333333333333",
+    out2TokenId: "0",
+    out2Memo: "0",
+  },
+
+  // If withdraw3 is missing, we'll fall back to base "withdraw" defaults
+  withdraw3: {
+    recipientWalletPubKey:
+      "1234567890123456789012345678901234567890123456789012345678901234",
+    recipientWalletPrivKey:
+      "1111111111111111111111111111111111111111111111111111111111111111",
+    amount: "160",
+    tokenId: "0",
+    randomness:
+      "33333333333333333333333333333333333333333333333333333333333333333",
+    memo: "0",
+    pathElements: Array(16).fill("0"),
+    pathIndices: Array(16).fill(0),
+  },
 };
-const dec = (x) => x.toString();
-const ensureArray = (val, len, fill = "0") => {
-  const a = Array.isArray(val) ? val.slice() : [];
-  while (a.length < len) a.push(fill);
-  a.length = len;
-  return a;
-};
-const booleanize = (arr, len) =>
-  ensureArray(arr, len, 0).map((v) => (Number(v) ? 1 : 0));
-const isAllZeroish = (arr) =>
-  Array.isArray(arr) &&
-  arr.every((v) => (typeof v === "string" ? v.trim() === "0" : Number(v) === 0));
 
 /* ---------------- labels (publicSignals order) ---------------- */
+// Transfer outputs are public by default in Circom 2; then we add two public inputs.
 const LABELS = {
   deposit: [
     "newCommitment",
@@ -51,539 +260,656 @@ const LABELS = {
   ],
   withdraw: ["nullifier", "merkleRoot", "recipientWalletPubKey", "amount", "tokenId"],
 };
+const labelKey = (name) => (LABELS[name] ? name : name.replace(/\d+$/, ""));
 
-/* ---------------- Poseidon + Merkle helpers ---------------- */
-async function getPoseidonClassic() {
-  // Works in CJS/ESM and under Jest without flags
-  try {
-    const { buildPoseidon } = await import("circomlibjs");
-    const poseidon = await buildPoseidon();
-    const F = poseidon.F || poseidon["F"];
-    const H = (...xs) => F.toObject(poseidon(xs));
-    return { poseidon, F, H };
-  } catch (e) {
-    const poseidonLib = require("circomlibjs");
-    const buildPoseidon =
-      poseidonLib.buildPoseidon || (poseidonLib.default && poseidonLib.default.buildPoseidon);
-    if (!buildPoseidon) throw e;
-    const poseidon = await buildPoseidon();
-    const F = poseidon.F || poseidon["F"];
-    const H = (...xs) => F.toObject(poseidon(xs));
-    return { poseidon, F, H };
-  }
-}
-async function computeZeros(depth) {
-  const { H } = await getPoseidonClassic();
-  const z = [0n];
-  for (let i = 1; i <= depth; i++) z[i] = H(z[i - 1], z[i - 1]);
-  return z;
-}
-function indicesFromIndex(nextLeafIndex, depth) {
-  const n = Number(nextLeafIndex) >>> 0;
-  return Array.from({ length: depth }, (_, i) => (n >> i) & 1);
-}
-function computeRoot(H, leaf, pathElements, pathIndices) {
-  let cur = toBig(leaf);
-  const depth = pathElements.length;
-  for (let i = 0; i < depth; i++) {
-    const sib = toBig(pathElements[i]);
-    const bit = Number(pathIndices[i]) ? 1 : 0;
-    cur = bit === 0 ? H(cur, sib) : H(sib, cur);
-  }
-  return cur;
-}
+/* ============================== Config ================================== */
+const DEFAULT_DEPTH =
+  Number(process.env.CP_TREE_DEPTH || process.env.TREE_DEPTH || 16);
 
-/* ----- subtree + sibling derivation (used by deposit/transfer) ----- */
-function buildSubtreeRoot(H, zeros, leavesMap, start, width) {
-  if (width === 1) {
-    const leaf = leavesMap.has(start) ? leavesMap.get(start) : zeros[0];
-    return toBig(leaf);
-  }
-  const half = width >>> 1;
-  const left = buildSubtreeRoot(H, zeros, leavesMap, start, half);
-  const right = buildSubtreeRoot(H, zeros, leavesMap, start + half, half);
-  return H(left, right);
-}
-function derivePathSiblings(H, zeros, leavesMap, j, depth) {
-  const siblings = [];
-  for (let i = 0; i < depth; i++) {
-    const width = 1 << i;
-    const siblingStart = (((j >> i) ^ 1) << i);
-    const sibRoot = buildSubtreeRoot(H, zeros, leavesMap, siblingStart, width);
-    siblings.push(sibRoot);
-  }
-  return siblings;
-}
+const BUILD = path.resolve(__dirname, "../build");
+const SUFFIXES = ["", "1", "2", "3"]; // A..D
 
-/* ----- robust layer-by-layer builder (used by withdraw final root) ----- */
-function buildLayersFromLeaves(H, zeros, leavesMap, depth) {
-  const N = 1 << depth;
-  const layers = new Array(depth + 1);
-
-  // layer 0: leaves
-  layers[0] = new Array(N);
-  for (let i = 0; i < N; i++) {
-    layers[0][i] = leavesMap.has(i) ? toBig(leavesMap.get(i)) : zeros[0];
-  }
-
-  // parent layers
-  for (let lvl = 1; lvl <= depth; lvl++) {
-    const prev = layers[lvl - 1];
-    const M = N >> lvl;
-    const cur = new Array(M);
-    for (let k = 0; k < M; k++) {
-      cur[k] = H(prev[2 * k], prev[2 * k + 1]);
-    }
-    layers[lvl] = cur;
-  }
-  return layers;
-}
-function pathFromLayers(layers, j, depth) {
-  const path = new Array(depth);
-  for (let lvl = 0; lvl < depth; lvl++) {
-    const nodeIdx = j >> lvl;
-    const sibIdx = nodeIdx ^ 1;
-    path[lvl] = layers[lvl][sibIdx];
-  }
-  return path;
-}
-
-/* ---------------- read BIN publics ---------------- */
-const DEFAULT_PROOFS_DIR = process.env.PROOFS_DIR
-  ? path.resolve(process.env.PROOFS_DIR)
-  : path.resolve(__dirname, "..", "..", "cipherpay-anchor", "proofs");
-
-function fromLeBytes32(buf) {
-  let x = 0n;
-  for (let i = 31; i >= 0; i--) x = (x << 8n) + BigInt(buf[i]);
-  return x;
-}
-function readPublicsFromBin(circuit) {
-  const p = path.join(DEFAULT_PROOFS_DIR, `${circuit}_public_signals.bin`);
-  if (!fs.existsSync(p)) throw new Error(`Missing ${circuit} BIN publics at ${p}`);
-  const b = fs.readFileSync(p);
-  if (b.length % 32 !== 0) throw new Error(`Bad ${circuit} publics length: ${b.length}`);
-  const n = b.length / 32;
-  const arr = [];
-  for (let i = 0; i < n; i++) {
-    arr.push(fromLeBytes32(b.subarray(i * 32, (i + 1) * 32)));
-  }
-  return arr;
-}
-
-/* ---------------- derive withdraw path from deposit+transfer BINs ---------------- */
-const DEP_IDX = { NEW_COMMITMENT: 0 };
-const XFER_IDX = { OUT1: 0, OUT2: 1, NEW_ROOT2: 5, NEW_NEXT_IDX: 6 };
-
-async function deriveWithdrawInputsFromTransfer(src, DEPTH) {
-  const dep = readPublicsFromBin("deposit");
-  const xfer = readPublicsFromBin("transfer");
-  const { H } = await getPoseidonClassic();
-
-  // Leaves present after transfer:
-  //   index 0  -> deposit.newCommitment  (append-only tree; spent note remains)
-  //   index j1 -> transfer.outCommitment1
-  //   index j2 -> transfer.outCommitment2
-  const depositLeaf = dep[DEP_IDX.NEW_COMMITMENT];
-  const out1 = xfer[XFER_IDX.OUT1];
-  const out2 = xfer[XFER_IDX.OUT2];
-  const newNext = Number(xfer[XFER_IDX.NEW_NEXT_IDX]); // e.g., 3 after inserting two leaves
-  const reportedNewRoot2 = xfer[XFER_IDX.NEW_ROOT2];
-
-  const j1 = newNext - 2;
-  const j2 = newNext - 1;
-
-  const zeros = await computeZeros(DEPTH);
-  const leaves = new Map();
-  leaves.set(0, depositLeaf);
-  leaves.set(j1, out1);
-  leaves.set(j2, out2);
-
-  // which output will withdraw spend?
-  const spendWhich = Number(src.spendWhich || 1) === 2 ? 2 : 1;
-  const spendIdx = spendWhich === 1 ? j1 : j2;
-  const targetOut = spendWhich === 1 ? out1 : out2;
-
-  // sanity: commitment reconstructed from withdraw preimage
-  const { H: H2 } = await getPoseidonClassic();
-  const rPub = toBig(src.recipientWalletPubKey);
-  const rPriv = toBig(src.recipientWalletPrivKey);
-  const cpk = H2(rPub, rPriv);
-  const amount = toBig(src.amount);
-  const tokenId = toBig(src.tokenId);
-  const randomness = toBig(src.randomness);
-  const memo = toBig(src.memo);
-  const recomputedCommitment = H2(amount, cpk, randomness, tokenId, memo);
-  if (recomputedCommitment !== targetOut) {
-    console.warn("⚠️ withdraw: commitment mismatch vs selected transfer output");
-    console.warn("   recomputed =", recomputedCommitment.toString());
-    console.warn("   expected   =", targetOut.toString());
-  }
-
-  // Build the final root (after both inserts) strictly layer-by-layer.
-  const layers = buildLayersFromLeaves(H, zeros, leaves, DEPTH);
-  const finalRoot = layers[DEPTH][0];
-
-  // Siblings and direction bits for the selected output leaf.
-  const pathElementsBig = pathFromLayers(layers, spendIdx, DEPTH);
-  const pathIndices = indicesFromIndex(spendIdx, DEPTH);
-
-  // Optional: compare to transfer.newMerkleRoot2 (circuits may report a non-sequential variant)
-  if (finalRoot !== reportedNewRoot2) {
-    console.warn("⚠️ withdraw: reconstructed final root != transfer.newMerkleRoot2");
-    console.warn("   reconstructed =", finalRoot.toString());
-    console.warn("   expected      =", reportedNewRoot2.toString());
-  } else {
-    console.log("• (withdraw) derived merkleRoot =", finalRoot.toString());
-  }
-
-  return {
-    pathElements: pathElementsBig.map(dec),
-    pathIndices,
-    commitment: dec(recomputedCommitment),
-  };
-}
-
-/* ---------------- preprocess per circuit ---------------- */
-async function preprocessInput(circuitName, input) {
-  const { H } = await getPoseidonClassic();
-  const src = JSON.parse(JSON.stringify(input || {}));
-
-  if (circuitName === "deposit") {
-    const ownerWalletPubKey = toBig(src.ownerWalletPubKey);
-    const ownerWalletPrivKey = toBig(src.ownerWalletPrivKey);
-    const amount = toBig(src.amount);
-    const nonce = toBig(src.nonce);
-
-    const ownerCipherPayPubKey = H(ownerWalletPubKey, ownerWalletPrivKey);
-    const expectedDepositHash = H(ownerCipherPayPubKey, amount, nonce);
-    if (!src.depositHash || toBig(src.depositHash) !== expectedDepositHash) {
-      console.log("• Overriding depositHash ->", expectedDepositHash.toString());
-      src.depositHash = dec(expectedDepositHash);
-    }
-
-    const DEPTH = Number(src.depth || process.env.CP_TREE_DEPTH || 16);
-    const z = await computeZeros(DEPTH);
-
-    const nextLeafIndex = toBig(src.nextLeafIndex);
-    const inPathIndices = indicesFromIndex(nextLeafIndex, DEPTH);
-
-    const userElems = ensureArray(src.inPathElements, DEPTH, "0");
-    const useZeros = isAllZeroish(userElems);
-    const pathElements = useZeros
-      ? Array.from({ length: DEPTH }, (_, i) => z[i])
-      : userElems.map(toBig);
-
-    const derivedOldRoot = computeRoot(H, 0n, pathElements, inPathIndices);
-    if (!src.oldMerkleRoot || toBig(src.oldMerkleRoot) !== derivedOldRoot) {
-      console.log("• Setting oldMerkleRoot ->", derivedOldRoot.toString());
-      src.oldMerkleRoot = dec(derivedOldRoot);
-    }
-
-    return {
-      ownerWalletPubKey: dec(ownerWalletPubKey),
-      ownerWalletPrivKey: dec(ownerWalletPrivKey),
-      randomness: dec(toBig(src.randomness)),
-      tokenId: dec(toBig(src.tokenId)),
-      memo: dec(toBig(src.memo)),
-      inPathElements: pathElements.map(dec),
-      inPathIndices,
-      nextLeafIndex: dec(nextLeafIndex),
-      nonce: dec(nonce),
-      amount: dec(amount),
-      depositHash: dec(expectedDepositHash),
-      oldMerkleRoot: dec(derivedOldRoot),
+// Reuse the same wasm/zkey but write to separate subdirs for numbered variants
+const CIRCUITS = {};
+for (const base of ["deposit", "transfer", "withdraw"]) {
+  for (const sfx of SUFFIXES) {
+    const name = base + sfx;
+    CIRCUITS[name] = {
+      wasm: path.join(BUILD, `${base}/${base}_js/${base}.wasm`),
+      zkey: path.join(BUILD, `${base}/${base}_final.zkey`),
+      outDir: path.join(BUILD, name),
+      inputFile: path.join(BUILD, name, "input.json"),
     };
   }
-
-  if (circuitName === "transfer") {
-    const DEPTH = Number(src.depth || process.env.CP_TREE_DEPTH || 16);
-    const z = await computeZeros(DEPTH);
-
-    // input note
-    const inAmount = toBig(src.inAmount);
-    const inPub = toBig(src.inSenderWalletPubKey);
-    const inPriv = toBig(src.inSenderWalletPrivKey);
-    const inRand = toBig(src.inRandomness);
-    const inTokenId = toBig(src.inTokenId);
-    const inMemo = toBig(src.inMemo);
-
-    const inCPPK = H(inPub, inPriv);
-    const inCommitment = H(inAmount, inCPPK, inRand, inTokenId, inMemo);
-
-    const inIndex = Number(src.inIndex ?? 0);
-    const preLeaves = new Map();
-    preLeaves.set(inIndex, inCommitment);
-
-    const inPathIndices = indicesFromIndex(inIndex, DEPTH);
-    const inPathElements = derivePathSiblings(H, z, preLeaves, inIndex, DEPTH);
-
-    // outputs — REQUIRE CipherPay pubkeys; do not accept raw wallet keys here
-    const out1CPK = toBig(src.out1RecipientCipherPayPubKey);
-    if (src.out1RecipientCipherPayPubKey === undefined) {
-      throw new Error(
-        "transfer: out1RecipientCipherPayPubKey is required. " +
-        "Do not pass recipientWalletPubKey/PrivKey to transfer."
-      );
-    }
-    const out2CPK = toBig(src.out2RecipientCipherPayPubKey);
-
-    const mkNote = (amount, cpk, rand, tokenId, memo) =>
-      H(toBig(amount), toBig(cpk), toBig(rand), toBig(tokenId), toBig(memo));
-
-    const outCommitment1 = mkNote(
-      src.out1Amount, out1CPK, src.out1Randomness, src.out1TokenId, src.out1Memo
-    );
-    const outCommitment2 = mkNote(
-      src.out2Amount, out2CPK, src.out2Randomness, src.out2TokenId, src.out2Memo
-    );
-
-    const encNote1Hash = H(outCommitment1, out1CPK);
-    const encNote2Hash = H(outCommitment2, out2CPK);
-
-    const nextLeafIndex = Number(src.nextLeafIndex ?? 1);
-    const j1 = nextLeafIndex;
-    const j2 = j1 + 1;
-
-    const out1PathElements = derivePathSiblings(H, z, preLeaves, j1, DEPTH);
-    const out2PathElements = derivePathSiblings(H, z, preLeaves, j2, DEPTH);
-
-    const merkleRootBefore = computeRoot(H, inCommitment, inPathElements, inPathIndices);
-    const newRoot1 = computeRoot(H, outCommitment1, out1PathElements, indicesFromIndex(j1, DEPTH));
-    const newRoot2 = computeRoot(H, outCommitment2, out2PathElements, indicesFromIndex(j2, DEPTH));
-
-    console.log("• (transfer) expected merkleRoot     =", merkleRootBefore.toString());
-    console.log("• (transfer) expected newMerkleRoot1 =", newRoot1.toString());
-    console.log("• (transfer) expected newMerkleRoot2 =", newRoot2.toString());
-    console.log("• (transfer) expected newNextLeafIndex =", String(nextLeafIndex + 2));
-
-    return {
-      inAmount: dec(inAmount),
-      inSenderWalletPubKey: dec(inPub),
-      inSenderWalletPrivKey: dec(inPriv),
-      inRandomness: dec(inRand),
-      inTokenId: dec(inTokenId),
-      inMemo: dec(inMemo),
-
-      inPathElements: inPathElements.map(dec),
-      inPathIndices,
-
-      out1Amount: dec(toBig(src.out1Amount)),
-      out1RecipientCipherPayPubKey: dec(out1CPK),
-      out1Randomness: dec(toBig(src.out1Randomness)),
-      out1TokenId: dec(toBig(src.out1TokenId)),
-      out1Memo: dec(toBig(src.out1Memo)),
-
-      out2Amount: dec(toBig(src.out2Amount)),
-      out2RecipientCipherPayPubKey: dec(out2CPK),
-      out2Randomness: dec(toBig(src.out2Randomness)),
-      out2TokenId: dec(toBig(src.out2TokenId)),
-      out2Memo: dec(toBig(src.out2Memo)),
-
-      nextLeafIndex: String(nextLeafIndex),
-      out1PathElements: out1PathElements.map(dec),
-      out2PathElements: out2PathElements.map(dec),
-
-      encNote1Hash: dec(encNote1Hash),
-      encNote2Hash: dec(encNote2Hash),
-    };
-  }
-
-  if (circuitName === "withdraw") {
-    const DEPTH = Number(src.depth || process.env.CP_TREE_DEPTH || 16);
-
-    // If explicit non-zero path was provided, use it; otherwise derive from BINs.
-    const userElems = ensureArray(src.pathElements, DEPTH, "0");
-    const userAllZero = isAllZeroish(userElems);
-
-    let pathElements = userElems.map(String);
-    let pathIndices = booleanize(src.pathIndices, DEPTH);
-    let commitmentOverride = null;
-
-    if (userAllZero || src.autoFromTransfer === true || src.autoFromTransfer === undefined) {
-      const derived = await deriveWithdrawInputsFromTransfer(src, DEPTH);
-      pathElements = derived.pathElements;
-      pathIndices = derived.pathIndices;
-      commitmentOverride = derived.commitment;
-    }
-
-    // final prepared input
-    const { H: H2 } = await getPoseidonClassic();
-    const rPub = toBig(src.recipientWalletPubKey);
-    const rPriv = toBig(src.recipientWalletPrivKey);
-    const amount = toBig(src.amount);
-    const tokenId = toBig(src.tokenId);
-    const randomness = toBig(src.randomness);
-    const memo = toBig(src.memo);
-
-    return {
-      recipientWalletPrivKey: dec(rPriv),
-      randomness: dec(randomness),
-      memo: dec(memo),
-      pathElements,
-      pathIndices,
-      recipientWalletPubKey: dec(rPub),
-      amount: dec(amount),
-      tokenId: dec(tokenId),
-      commitment: commitmentOverride
-        ? commitmentOverride
-        : dec(H2(amount, H2(rPub, rPriv), randomness, tokenId, memo)),
-    };
-  }
-
-  return src;
 }
 
-/* ---------------- main proof function ---------------- */
-async function generateProof(circuitName, input) {
-  console.log(`Generating proof for ${circuitName} circuit...`);
-
-  const buildPath = path.join(__dirname, `../build/${circuitName}`);
-  const wasmPath = path.join(buildPath, `${circuitName}_js/${circuitName}.wasm`);
-  const zkeyPath = path.join(buildPath, `${circuitName}_final.zkey`);
-
-  if (!fs.existsSync(wasmPath)) {
-    throw new Error(`WASM file not found at ${wasmPath}. Please run setup.js first.`);
-  }
-  if (!fs.existsSync(zkeyPath)) {
-    throw new Error(`ZKey file not found at ${zkeyPath}. Please run setup.js first.`);
-  }
-
-  const prepared = await preprocessInput(circuitName, input);
-
-  console.log("Generating proof...");
-  const { proof, publicSignals } = await snarkjs.groth16.fullProve(prepared, wasmPath, zkeyPath);
-
-  fs.mkdirSync(buildPath, { recursive: true });
-  fs.writeFileSync(path.join(buildPath, "proof.json"), JSON.stringify(proof, null, 2));
-  fs.writeFileSync(path.join(buildPath, "public_signals.json"), JSON.stringify(publicSignals, null, 2));
-
-  const labels = LABELS[circuitName];
-  if (labels && labels.length === publicSignals.length) {
-    const labeled = {};
-    for (let i = 0; i < labels.length; i++) labeled[labels[i]] = publicSignals[i];
-    fs.writeFileSync(
-      path.join(buildPath, "public_signals_labeled.json"),
-      JSON.stringify(labeled, null, 2)
-    );
-    console.log("Public signals (labeled):");
-    for (let i = 0; i < labels.length; i++) console.log(`  ${labels[i]} = ${publicSignals[i]}`);
-  } else {
-    console.log(`Public signals (${publicSignals.length}): ${publicSignals.join(", ")}`);
-  }
-
-  console.log(`Proof generated and saved to ${path.join(buildPath, "proof.json")}`);
-  return { proof, publicSignals };
-}
-
-/* ---------------- example inputs ---------------- */
-const exampleInputs = {
-  deposit: {
-    ownerWalletPubKey: "0",
-    ownerWalletPrivKey: "0",
-    randomness: "0",
-    tokenId: "0",
-    memo: "0",
-    inPathElements: Array(16).fill("0"),
-    inPathIndices: Array(16).fill(0),
-    nextLeafIndex: "0",
-    nonce: "0",
-    amount: "100",
-  },
-
+// parse indices from LABELS
+const IDX = {
+  deposit: { COMMITMENT: LABELS.deposit.indexOf("newCommitment") },
   transfer: {
-    inAmount: "100",
-    inSenderWalletPubKey: "0",
-    inSenderWalletPrivKey: "0",
-    inRandomness: "0",
-    inTokenId: "0",
-    inMemo: "0",
-    inIndex: "0",
-
-    // out1 uses the recipient's CipherPay pubkey (Poseidon(pub,priv)), NOT the raw keys
-    out1Amount: "60",
-    out1RecipientCipherPayPubKey:
-      "19671880629798928171529795066366940826437446602236033626838552573503527465966",
-    out1Randomness:
-      "4444444444444444444444444444444444444444444444444444444444444444",
-    out1TokenId: "0",
-    out1Memo: "0",
-
-    // out2 stays as a CipherPay pubkey as before
-    out2Amount: "40",
-    out2RecipientCipherPayPubKey:
-      "5555555555555555555555555555555555555555555555555555555555555555",
-    out2Randomness:
-      "7777777777777777777777777777777777777777777777777777777777777777",
-    out2TokenId: "0",
-    out2Memo: "0",
-
-    nextLeafIndex: "1",
-    out1PathElements: Array(16).fill("0"),
-    out2PathElements: Array(16).fill("0"),
-  },
-
-  // Default withdraw spends out1 (auto-derives from BINs)
-  withdraw: {
-    spendWhich: 1, // 1 or 2
-    recipientWalletPubKey:
-      "1234567890123456789012345678901234567890123456789012345678901234",
-    recipientWalletPrivKey:
-      "1111111111111111111111111111111111111111111111111111111111111111",
-    amount: "60",
-    tokenId: "0",
-    randomness:
-      "4444444444444444444444444444444444444444444444444444444444444444",
-    memo: "0",
-    pathElements: Array(16).fill("0"),
-    pathIndices: Array(16).fill(0),
+    OUT1: LABELS.transfer.indexOf("outCommitment1"),
+    OUT2: LABELS.transfer.indexOf("outCommitment2"),
+    NEW_ROOT1: LABELS.transfer.indexOf("newMerkleRoot1"),
+    NEW_ROOT2: LABELS.transfer.indexOf("newMerkleRoot2"),
+    NEXT_LEAF_INDEX: LABELS.transfer.indexOf("newNextLeafIndex"),
   },
 };
 
-/* ---------------- CLI ---------------- */
-async function main() {
-  const args = process.argv.slice(2);
-  const circuitName = args[0];
-  if (!circuitName) {
-    console.log("Usage: node generate-example-proof.js <circuit-name> [-i input.json]");
-    console.log("Available circuits:", Object.keys(exampleInputs).join(", "));
-    process.exit(1);
+/* ================== Whitelist the inputs per circuit ==================== */
+const ALLOWED_INPUTS = {
+  deposit: new Set([
+    "ownerWalletPubKey",
+    "ownerWalletPrivKey",
+    "randomness",
+    "tokenId",
+    "memo",
+    "inPathElements",
+    "inPathIndices",
+    "nextLeafIndex",
+    "nonce",
+    "amount",
+    "depositHash",
+    "oldMerkleRoot",
+  ]),
+  transfer: new Set([
+    // input note preimage
+    "inAmount",
+    "inSenderWalletPubKey",
+    "inSenderWalletPrivKey",
+    "inRandomness",
+    "inTokenId",
+    "inMemo",
+    // membership path for the input note
+    "inPathElements",
+    "inPathIndices",
+    // insertion info
+    "nextLeafIndex",
+    "out1PathElements",
+    "out2PathElements",
+    // outputs (note preimages)
+    "out1Amount",
+    "out1RecipientCipherPayPubKey",
+    "out1Randomness",
+    "out1TokenId",
+    "out1Memo",
+    "out2Amount",
+    "out2RecipientCipherPayPubKey",
+    "out2Randomness",
+    "out2TokenId",
+    "out2Memo",
+    // public inputs
+    "encNote1Hash",
+    "encNote2Hash",
+  ]),
+  withdraw: new Set([
+    "recipientWalletPubKey",
+    "recipientWalletPrivKey",
+    "amount",
+    "tokenId",
+    "randomness",
+    "memo",
+    "pathElements",
+    "pathIndices",
+    "commitment",
+  ]),
+};
+
+const baseCircuit = (c) => c.replace(/\d+$/, "");
+function sanitizeInputs(circuit, obj) {
+  const allow = ALLOWED_INPUTS[baseCircuit(circuit)];
+  const out = {};
+  for (const k of Object.keys(obj || {})) if (allow.has(k)) out[k] = obj[k];
+  return out;
+}
+
+/* ---- required-input defaults (all strings) ---- */
+function withDepositDefaults(inp = {}) {
+  return {
+    ownerWalletPubKey:   inp.ownerWalletPubKey   ?? "0",
+    ownerWalletPrivKey:  inp.ownerWalletPrivKey  ?? "0",
+    randomness:          inp.randomness          ?? "0",
+    tokenId:             inp.tokenId             ?? "0",
+    memo:                inp.memo                ?? "0",
+  };
+}
+function withTransferDefaults(inp = {}) {
+  const z = "0";
+  return {
+    // input note
+    inAmount:                 inp.inAmount                 ?? z,
+    inSenderWalletPubKey:     inp.inSenderWalletPubKey     ?? z,
+    inSenderWalletPrivKey:    inp.inSenderWalletPrivKey    ?? z,
+    inRandomness:             inp.inRandomness             ?? z,
+    inTokenId:                inp.inTokenId                ?? z,
+    inMemo:                   inp.inMemo                   ?? z,
+    // out1
+    out1Amount:               inp.out1Amount               ?? z,
+    out1RecipientCipherPayPubKey: inp.out1RecipientCipherPayPubKey ?? z,
+    out1Randomness:           inp.out1Randomness           ?? z,
+    out1TokenId:              inp.out1TokenId              ?? z,
+    out1Memo:                 inp.out1Memo                 ?? z,
+    // out2
+    out2Amount:               inp.out2Amount               ?? z,
+    out2RecipientCipherPayPubKey: inp.out2RecipientCipherPayPubKey ?? z,
+    out2Randomness:           inp.out2Randomness           ?? z,
+    out2TokenId:              inp.out2TokenId              ?? z,
+    out2Memo:                 inp.out2Memo                 ?? z,
+  };
+}
+function withWithdrawDefaults(inp = {}) {
+  const z = "0";
+  return {
+    recipientWalletPubKey:  inp.recipientWalletPubKey  ?? z,
+    recipientWalletPrivKey: inp.recipientWalletPrivKey ?? z,
+    amount:                 inp.amount                 ?? z,
+    tokenId:                inp.tokenId                ?? z,
+    randomness:             inp.randomness             ?? z,
+    memo:                   inp.memo                   ?? z,
+  };
+}
+
+/* ============================== IO Helpers ============================== */
+function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
+function readJSON(file, fallback = null) {
+  if (!fs.existsSync(file)) return fallback;
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+function writeJSON(file, obj) {
+  ensureDir(path.dirname(file));
+  fs.writeFileSync(file, JSON.stringify(obj, null, 2));
+}
+function mustExist(file, hint) {
+  if (!fs.existsSync(file)) throw new Error(`${hint} not found at ${file}. Please compile circuits first.`);
+}
+
+/* ========================= BigInt & field utils ======================== */
+function toBig(x) {
+  if (typeof x === "bigint") return x;
+  if (typeof x === "number") return BigInt(x);
+  if (typeof x === "string") return BigInt(x.trim());
+  throw new Error(`Cannot convert to BigInt: ${x}`);
+}
+const bigToDec = (x) => x.toString(10);
+function lsbBits(n, len) {
+  const out = new Array(len);
+  for (let i = 0; i < len; i++) out[i] = (n >> i) & 1 ? 1 : 0;
+  return out;
+}
+function poseidon2(F, P, a, b) {
+  return F.toObject(P([toBig(a), toBig(b)]));
+}
+function poseidon3(F, P, a, b, c) {
+  return F.toObject(P([toBig(a), toBig(b), toBig(c)]));
+}
+function poseidon5(F, P, a, b, c, d, e) {
+  return F.toObject(P([toBig(a), toBig(b), toBig(c), toBig(d), toBig(e)]));
+}
+
+/* ======================= Poseidon Merkle Tree ========================== */
+class PoseidonTree {
+  constructor(depth, poseidon) {
+    this.depth = depth;
+    this.poseidon = poseidon;
+    this.F = poseidon.F;
+    this.zeros = [0n];
+    for (let i = 1; i <= depth; i++) {
+      this.zeros[i] = this.hash2(this.zeros[i - 1], this.zeros[i - 1]);
+    }
+    this.levels = Array.from({ length: depth + 1 }, (_, level) => {
+      const width = level === 0 ? 0 : 2 ** (depth - level);
+      return Array(width).fill(this.zeros[level]);
+    });
+    this.nextIndex = 0;
+  }
+  hash2(a, b) { return this.F.toObject(this.poseidon([toBig(a), toBig(b)])); }
+  root() { return (this.levels[this.depth]?.[0]) ?? this.zeros[this.depth]; }
+  append(leafBig) {
+    if (this.nextIndex >= 2 ** this.depth) throw new Error("Merkle tree full");
+    if (!this.levels[0]) this.levels[0] = [];
+    this.levels[0][this.nextIndex] = toBig(leafBig);
+    let idx = this.nextIndex;
+    for (let lvl = 1; lvl <= this.depth; lvl++) {
+      const parent = Math.floor(idx / 2);
+      const left  = this.levels[lvl - 1][parent * 2] ?? this.zeros[lvl - 1];
+      const right = this.levels[lvl - 1][parent * 2 + 1] ?? this.zeros[lvl - 1];
+      this.levels[lvl][parent] = this.hash2(left, right);
+      idx = parent;
+    }
+    return this.nextIndex++;
+  }
+  path(index) {
+    if (index >= this.nextIndex) throw new Error("Path for unfilled index");
+    const siblings = [], indices = [];
+    let idx = index;
+    for (let lvl = 0; lvl < this.depth; lvl++) {
+      const sibIdx = idx ^ 1;
+      siblings.push(this.levels[lvl][sibIdx] ?? this.zeros[lvl]);
+      indices.push(idx & 1 ? 1 : 0);
+      idx >>= 1;
+    }
+    return { siblings, indices };
+  }
+  insertionSiblings(index) {
+    const siblings = [];
+    let idx = index;
+    for (let lvl = 0; lvl < this.depth; lvl++) {
+      const sibIdx = idx ^ 1;
+      siblings.push(this.levels[lvl][sibIdx] ?? this.zeros[lvl]);
+      idx >>= 1;
+    }
+    return siblings;
+  }
+  static computeRootFromPath(poseidon, leaf, siblings, indices) {
+    const P = poseidon, F = P.F;
+    let cur = toBig(leaf);
+    for (let lvl = 0; lvl < indices.length; lvl++) {
+      const b = indices[lvl] ? 1n : 0n;
+      const sib = toBig(siblings[lvl]);
+      const left  = b ? sib : cur;
+      const right = b ? cur : sib;
+      cur = F.toObject(P([left, right]));
+    }
+    return cur;
+  }
+}
+
+/* ===== recompute newRoot1/newRoot2 like the patched Transfer circuit ==== */
+function computeNewRootsForTransfer({
+  poseidon, depth, nextLeafIndex,
+  out1PathElements, out2PathElements,
+  outCommitment1, outCommitment2,
+}) {
+  const P = poseidon, F = P.F;
+
+  // Step 7: insertion #1 (out1) using out1PathElements at index = nextLeafIndex
+  const bits1 = lsbBits(nextLeafIndex, depth);
+  const cur1 = new Array(depth + 1);
+  cur1[0] = toBig(outCommitment1);
+
+  for (let j = 0; j < depth; j++) {
+    const sib = toBig(out1PathElements[j]);
+    const b = bits1[j] ? 1n : 0n;
+    const left  = b ? sib : cur1[j];
+    const right = b ? cur1[j] : sib;
+    cur1[j + 1] = F.toObject(P([left, right]));
+  }
+  const newRoot1 = cur1[depth];
+
+  // Step 8: insertion #2 (out2) at index = nextLeafIndex + 1
+  const nextIdx1 = nextLeafIndex + 1;
+  const bits2 = lsbBits(nextIdx1, depth);
+
+  const cur2 = new Array(depth + 1);
+  cur2[0] = toBig(outCommitment2);
+
+  // Level 0 sibling selection per patched circuit:
+  const b1 = bits1[0] ? 1n : 0n;
+  const t0 = toBig(out2PathElements[0]) - toBig(outCommitment1);
+  const sib0 = toBig(outCommitment1) + b1 * t0;
+
+  const b0_2 = bits2[0] ? 1n : 0n;
+  const left0  = b0_2 ? sib0 : cur2[0];
+  const right0 = b0_2 ? cur2[0] : sib0;
+  cur2[1] = F.toObject(P([left0, right0]));
+
+  // Levels 1..depth-1 : use updated nodes from cur1[k] as siblings
+  for (let k = 1; k < depth; k++) {
+    const sibk = cur1[k];
+    const b = bits2[k] ? 1n : 0n;
+    const left  = b ? sibk : cur2[k];
+    const right = b ? cur2[k] : sibk;
+    cur2[k + 1] = F.toObject(P([left, right]));
+  }
+  const newRoot2 = cur2[depth];
+  return { newRoot1, newRoot2, midSiblings: [sib0, ...cur1.slice(1, depth)] };
+}
+
+/* ========================= Circuit entry points ======================== */
+function cfgFor(circuit) { return CIRCUITS[circuit]; }
+
+function loadInputsOrExample(circuit) {
+  const cfg = cfgFor(circuit);
+  ensureDir(cfg.outDir);
+  if (fs.existsSync(cfg.inputFile)) return readJSON(cfg.inputFile, {});
+  // Fall back to exact name, then to base name
+  return JSON.parse(JSON.stringify(exampleInputs[circuit] ?? exampleInputs[baseCircuit(circuit)] ?? {}));
+}
+
+async function fullProveToJson(wasm, zkey, inputs, outDir, friendlyName) {
+  mustExist(wasm, `${friendlyName} WASM`);
+  mustExist(zkey, `${friendlyName} ZKEY`);
+  const { proof, publicSignals } = await groth16.fullProve(inputs, wasm, zkey);
+  writeJSON(path.join(outDir, "proof.json"), proof);
+  writeJSON(path.join(outDir, "public_signals.json"), publicSignals);
+  const labels = LABELS[labelKey(friendlyName)];
+  if (Array.isArray(labels)) {
+    const labeled = {};
+    for (let i = 0; i < Math.min(labels.length, publicSignals.length); i++) {
+      labeled[labels[i]] = publicSignals[i];
+    }
+    writeJSON(path.join(outDir, "public_signals_labeled.json"), labeled);
+  }
+  return { proof, publicSignals };
+}
+
+function getDepositCommitmentFromPublics(publicSignals) {
+  return toBig(publicSignals[IDX.deposit.COMMITMENT]);
+}
+function getTransferOutputsFromPublics(publicSignals) {
+  return {
+    out1: toBig(publicSignals[IDX.transfer.OUT1]),
+    out2: toBig(publicSignals[IDX.transfer.OUT2]),
+    newRoot1: toBig(publicSignals[IDX.transfer.NEW_ROOT1]),
+    newRoot2: toBig(publicSignals[IDX.transfer.NEW_ROOT2]),
+    nextLeafIndex: Number(publicSignals[IDX.transfer.NEXT_LEAF_INDEX]),
+  };
+}
+
+/* ===================== Input preparation (overrides) =================== */
+function overrideTransferInputs(input, {
+  inSiblings, inIndices, nextLeafIndex, out1Siblings, out2Siblings,
+  encNote1Hash, encNote2Hash,
+}) {
+  return {
+    ...input,
+    inPathElements: inSiblings.map(bigToDec),
+    inPathIndices: inIndices.map(Number),
+    nextLeafIndex: String(nextLeafIndex),
+    out1PathElements: out1Siblings.map(bigToDec),
+    out2PathElements: out2Siblings.map(bigToDec),
+    encNote1Hash: bigToDec(encNote1Hash),
+    encNote2Hash: bigToDec(encNote2Hash),
+  };
+}
+
+function overrideWithdrawPathInputs(input, { siblings, indices }) {
+  const out = { ...input };
+  out.pathElements = siblings.map(bigToDec);
+  out.pathIndices  = indices.map(Number);
+  return out;
+}
+
+/* ============================ Drivers ================================== */
+async function runDeposit(poseidon, depth, sharedTree, variant = "deposit") {
+  console.log(`Generating proof for ${variant} circuit...`);
+  const cfg = cfgFor(variant);
+  const P = poseidon;
+  const inputsRaw = loadInputsOrExample(variant);
+  const inputs = { ...withDepositDefaults(inputsRaw), ...inputsRaw }; // ensure required keys
+
+  const tree = sharedTree ?? new PoseidonTree(depth, P);
+  const oldRoot = tree.root();
+  const nextIdx = tree.nextIndex;
+
+  // siblings/indices for the ZERO leaf at nextLeafIndex (pre-insertion)
+  const pathElems = tree.insertionSiblings(nextIdx);
+  const pathIdxs  = lsbBits(nextIdx, depth);
+
+  const amount = inputs.amount ?? "0";
+  const nonce  = inputs.nonce  ?? "0";
+
+  const ownerCipherPayPubKey = poseidon2(P.F, P, inputs.ownerWalletPubKey, inputs.ownerWalletPrivKey);
+  const depositHash          = poseidon3(P.F, P, ownerCipherPayPubKey, amount, nonce);
+
+  const filled = sanitizeInputs(variant, {
+    ...inputs, // includes the 5 required preimage fields
+    amount: String(amount),
+    nonce: String(nonce),
+    oldMerkleRoot: oldRoot.toString(10),
+    nextLeafIndex: String(nextIdx),
+    inPathElements: pathElems.map((x) => x.toString(10)),
+    inPathIndices: pathIdxs.map(Number),
+    depositHash: depositHash.toString(10),
+  });
+
+  const { publicSignals } = await fullProveToJson(
+    cfg.wasm, cfg.zkey, filled, cfg.outDir, variant
+  );
+  const depCommitment = getDepositCommitmentFromPublics(publicSignals);
+  return { depCommitment };
+}
+
+async function runTransfer(poseidon, depth, tree, depIdx, variant = "transfer") {
+  console.log(`Generating proof for ${variant} circuit...`);
+  const cfg = cfgFor(variant);
+  const raw = loadInputsOrExample(variant);
+  let inputs = { ...withTransferDefaults(raw), ...raw }; // ensure required keys
+  const P = poseidon;
+
+  // Input membership (deposit commitment)
+  const { siblings: inSiblings, indices: inIndices } = tree.path(depIdx);
+
+  // Next insertion positions for out1/out2 on the current tree
+  const nextIdx = tree.nextIndex;
+  const out1Siblings = tree.insertionSiblings(nextIdx);
+  const out2Siblings = tree.insertionSiblings(nextIdx + 1);
+
+  // Compute out1/out2 commitments so we can supply encNote{1,2}Hash
+  const out1Commitment = poseidon5(
+    P.F, P,
+    inputs.out1Amount, inputs.out1RecipientCipherPayPubKey,
+    inputs.out1Randomness, inputs.out1TokenId, inputs.out1Memo
+  );
+  const out2Commitment = poseidon5(
+    P.F, P,
+    inputs.out2Amount, inputs.out2RecipientCipherPayPubKey,
+    inputs.out2Randomness, inputs.out2TokenId, inputs.out2Memo
+  );
+  const encNote1Hash = poseidon2(P.F, P, out1Commitment, inputs.out1RecipientCipherPayPubKey);
+  const encNote2Hash = poseidon2(P.F, P, out2Commitment, inputs.out2RecipientCipherPayPubKey);
+
+  inputs = overrideTransferInputs(inputs, {
+    inSiblings, inIndices,
+    nextLeafIndex: nextIdx,
+    out1Siblings,
+    out2Siblings,
+    encNote1Hash,
+    encNote2Hash,
+  });
+  inputs = sanitizeInputs(variant, inputs);
+
+  // Pre-compute roots exactly like the circuit (to cross-check pubs)
+  const { newRoot1: compRoot1, newRoot2: compRoot2 } = computeNewRootsForTransfer({
+    poseidon, depth,
+    nextLeafIndex: nextIdx,
+    out1PathElements: out1Siblings,
+    out2PathElements: out2Siblings,
+    outCommitment1: out1Commitment,
+    outCommitment2: out2Commitment,
+  });
+
+  const { publicSignals } = await fullProveToJson(
+    cfg.wasm, cfg.zkey, inputs, cfg.outDir, variant
+  );
+
+  const { out1, out2, newRoot1, newRoot2 } = getTransferOutputsFromPublics(publicSignals);
+
+  // Append to actual tree to get FINAL root (after out2)
+  const j1 = tree.append(out1);
+  const j2 = tree.append(out2);
+
+  console.log("• (transfer) newMerkleRoot1 (computed) =", compRoot1.toString(10));
+  console.log("• (transfer) newMerkleRoot1 (pubs)     =", newRoot1.toString(10));
+  console.log("• (transfer) newMerkleRoot2 (pre-state computed) =", compRoot2.toString(10));
+  console.log("• (transfer) newMerkleRoot2 (MID)               =", tree.root().toString(10));
+  console.log("• (transfer) newMerkleRoot2 (pubs)              =", newRoot2.toString(10));
+  console.log("• (transfer) out1 index =", j1, "out2 index =", j2);
+
+  // Persist out2 path snapshot (from FINAL tree)
+  const mid = tree.path(j2);
+  writeJSON(path.join(cfg.outDir, "out2_paths.json"), {
+    pre_siblings_dec: out2Siblings.map(bigToDec),
+    final_siblings_dec: mid.siblings.map(bigToDec),
+  });
+
+  return { out1, out2, j1, j2, newRoot1, newRoot2 };
+}
+
+async function runWithdraw_spendOut2(poseidon, depth, tree, j2, newRoot2FromTransfer, out2Commitment, variant = "withdraw") {
+  console.log(`Generating proof for ${variant} circuit...`);
+  const cfg = cfgFor(variant);
+  const raw = loadInputsOrExample(variant);
+  let inputs = { ...withWithdrawDefaults(raw), ...raw }; // ensure required keys
+
+  // Path for out2 ON THE FINAL TREE (after out2 insertion)
+  const { siblings, indices } = tree.path(j2);
+
+  console.log("• (withdraw) spending output: out2");
+  console.log("• (withdraw) j2 (leaf index) =", j2);
+  console.log("• (withdraw) pathIndices[0..8]  =", indices.slice(0, 9).join(", "), "…");
+  console.log("• (withdraw) pathElements[0..4] =", siblings.slice(0, 5).map(bigToDec).join(", "), "…");
+
+  // Cross-check root from path equals transfer.newMerkleRoot2
+  const rootFromPath = PoseidonTree.computeRootFromPath(poseidon, out2Commitment, siblings, indices);
+  console.log("• (withdraw) merkleRoot (used)  =", rootFromPath.toString(10));
+  console.log("• (transfer) newMerkleRoot2     =", newRoot2FromTransfer.toString(10));
+
+  writeJSON(path.join(cfg.outDir, "path_used.json"), {
+    j2,
+    path_indices: indices,
+    path_elements_dec: siblings.map(bigToDec),
+    commitment_dec: bigToDec(out2Commitment),
+    merkle_root_from_path_dec: bigToDec(rootFromPath),
+    transfer_newMerkleRoot2_dec: bigToDec(newRoot2FromTransfer),
+  });
+
+  if (rootFromPath !== newRoot2FromTransfer) {
+    throw new Error("withdraw: merkle root != transfer.newMerkleRoot2");
   }
 
-  let input = exampleInputs[circuitName];
-  const iPos = args.indexOf("-i");
-  if (iPos !== -1 && args[iPos + 1]) {
-    const inputPath = path.resolve(args[iPos + 1]);
-    if (!fs.existsSync(inputPath)) {
-      console.error("Input file not found:", inputPath);
-      process.exit(1);
-    }
-    input = JSON.parse(fs.readFileSync(inputPath, "utf8"));
+  // Prepare witness inputs
+  inputs = overrideWithdrawPathInputs(inputs, { siblings, indices });
+  inputs.commitment = bigToDec(out2Commitment); // circuit expects private 'commitment'
+  inputs = sanitizeInputs(variant, inputs);
+
+  await fullProveToJson(cfg.wasm, cfg.zkey, inputs, cfg.outDir, variant);
+}
+
+/* ============================== Pipelines =============================== */
+async function runPipeline(poseidon, depth, tree, suffix = "") {
+  const depName = "deposit" + suffix;
+  const xferName = "transfer" + suffix;
+  const wdName = "withdraw" + suffix;
+
+  const { depCommitment } = await runDeposit(poseidon, depth, tree, depName);
+  const depIdx = tree.append(depCommitment);
+  console.log(`• (${depName}) commitment index =`, depIdx);
+  console.log(`• (${depName}) new root         =`, tree.root().toString(10));
+
+  const { out2, j2, newRoot2 } = await runTransfer(poseidon, depth, tree, depIdx, xferName);
+  await runWithdraw_spendOut2(poseidon, depth, tree, j2, newRoot2, out2, wdName);
+}
+
+/* ========== Rebuild tree from prior publics for single withdrawX ======= */
+function ensurePublicsPresent(name) {
+  const f = path.join(CIRCUITS[name].outDir, "public_signals.json");
+  const j = readJSON(f);
+  if (!j) throw new Error(`Missing ${f} — run 'all' first to generate pipeline outputs.`);
+  return j;
+}
+
+// Rebuild leaves in order up to a given suffix count (0..3),
+// each pipeline contributes 3 leaves: deposit, out1, out2.
+function rebuildTreeUpToSuffix(depth, poseidon, maxSuffix = 0) {
+  const tree = new PoseidonTree(depth, poseidon);
+  let lastOut2 = null;
+  let lastJ2 = -1;
+  let lastNewRoot2 = null;
+
+  for (let s = 0; s <= maxSuffix; s++) {
+    const suf = s === 0 ? "" : String(s);
+    const depPubs = ensurePublicsPresent("deposit" + suf);
+    const xferPubs = ensurePublicsPresent("transfer" + suf);
+
+    const depCommitment = getDepositCommitmentFromPublics(depPubs);
+    const { out1, out2, newRoot2 } = getTransferOutputsFromPublics(xferPubs);
+
+    tree.append(depCommitment);
+    tree.append(out1);
+    lastJ2 = tree.append(out2);
+    lastOut2 = out2;
+    lastNewRoot2 = newRoot2;
   }
+
+  return { tree, j2: lastJ2, out2: lastOut2, newRoot2: lastNewRoot2 };
+}
+
+/* ============================== All / Single =========================== */
+async function runAll(depth = DEFAULT_DEPTH) {
+  console.log("Generating proofs for pipelines A–D: A(deposit->transfer->withdraw) then B, C, D on SAME tree...");
+  const poseidon = await circomlib.buildPoseidon();
+  const tree = new PoseidonTree(depth, poseidon);
+
+  console.log("• (tree) genesis root =", tree.root().toString(10));
+
+  for (const suf of SUFFIXES) {
+    await runPipeline(poseidon, depth, tree, suf);
+  }
+
+  console.log("\n✅ Pipelines A–D completed.");
+}
+
+/* ================================= CLI ================================= */
+(async function main() {
+  const cmd = (process.argv[2] || "").trim().toLowerCase();
+  const depthArg = process.argv.find((a) => a.startsWith("--depth="));
+  const depth = depthArg ? Number(depthArg.split("=")[1]) : DEFAULT_DEPTH;
 
   try {
-    const { proof, publicSignals } = await generateProof(circuitName, input);
-    console.log("\n✅ Proof generation completed successfully!");
-    console.log(`📊 Public signals: ${publicSignals.length}`);
-    console.log(`🔐 Proof parts: ${Object.keys(proof).join(", ")}`);
-    process.exit(0);
+    if (cmd === "all" || cmd === "pipeline") {
+      await runAll(depth);
+      process.exit(0);
+    }
+
+    const poseidon = await circomlib.buildPoseidon();
+
+    if (/^deposit\d*$/.test(cmd)) {
+      const tree = new PoseidonTree(depth, poseidon); // fresh
+      await runDeposit(poseidon, depth, tree, cmd);
+      console.log(`\n✅ ${cmd} completed (JSON written to build/${cmd}/)`);
+      process.exit(0);
+    }
+
+    if (/^transfer\d*$/.test(cmd)) {
+      // Rebuild minimal state: needs deposit of same suffix
+      const depName = cmd.replace(/^transfer/, "deposit");
+      const depPubs = ensurePublicsPresent(depName);
+      const depCommitment = getDepositCommitmentFromPublics(depPubs);
+      const tree = new PoseidonTree(depth, poseidon);
+      const depIdx = tree.append(depCommitment);
+      await runTransfer(poseidon, depth, tree, depIdx, cmd);
+      console.log(`\n✅ ${cmd} completed (JSON written to build/${cmd}/)`);
+      process.exit(0);
+    }
+
+    if (/^withdraw\d*$/.test(cmd)) {
+      // Rebuild full tree up to that suffix
+      const sfx = cmd.replace("withdraw", "");
+      const maxSuffix = sfx === "" ? 0 : Number(sfx);
+      const { tree, j2, out2, newRoot2 } = rebuildTreeUpToSuffix(depth, poseidon, maxSuffix);
+      await runWithdraw_spendOut2(poseidon, depth, tree, j2, newRoot2, out2, cmd);
+      console.log(`\n✅ ${cmd} completed (JSON written to build/${cmd}/)`);
+      process.exit(0);
+    }
+
+    // Help
+    console.log("Usage:");
+    console.log("  node scripts/generate-example-proof.js all [--depth=16]");
+    console.log("  node scripts/generate-example-proof.js deposit|transfer|withdraw");
+    console.log("  node scripts/generate-example-proof.js deposit1|transfer1|withdraw1");
+    console.log("  node scripts/generate-example-proof.js deposit2|transfer2|withdraw2");
+    console.log("  node scripts/generate-example-proof.js deposit3|transfer3|withdraw3");
+    process.exit(1);
   } catch (err) {
     console.error("❌ Proof generation failed:", err.message || err);
     console.error(
       "   Hints:\n" +
-        "    • Run deposit → transfer first so withdraw can auto-derive from BINs.\n" +
-        "    • If you run circuits individually, ensure proofs/*.bin exist for source steps.\n"
+        "    • Ensure WASM/ZKEY exist under build/*/*_js and build/*/*_final.zkey.\n" +
+        "    • Withdraw(out2) uses the FINAL tree path; we pass 'commitment' privately.\n" +
+        "    • Unknown keys are stripped to avoid `Signal not found`.\n" +
+        "    • LABELS are reused for numbered variants via base-name matching.\n"
     );
+    if (process.env.DEBUG) console.error(err);
     process.exit(1);
   }
-}
-
-if (require.main === module) main();
-
-module.exports = {
-  generateProof,
-  preprocessInput,
-  exampleInputs,
-  computeZeros,
-  indicesFromIndex,
-};
+})();

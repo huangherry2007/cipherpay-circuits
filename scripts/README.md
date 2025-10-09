@@ -9,7 +9,9 @@ Builds all core circuits and generates proving/verification keys.
 
 **Usage:**
 ```bash
-node scripts/setup.js
+npm run setup
+npm run generate-proof
+
 ```
 
 **What it does:**

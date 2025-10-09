@@ -5,13 +5,12 @@
 
 const fs = require("fs");
 const path = require("path");
-const { generateProof, exampleInputs } = require("./generate-example-proof.js");
 
 // BN254 (bn128) field prime
 const FQ =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
-// ---------- bigint helpers ----------
+/* ----------------------------- bigint helpers ---------------------------- */
 const asBig = (v) => {
   if (typeof v === "bigint") return v;
   if (typeof v === "number") return BigInt(v);
@@ -37,7 +36,7 @@ const le32 = (x) => {
   return b;
 };
 
-// ---------- point parsers ----------
+/* -------------------------------- parsers -------------------------------- */
 /** G1: accept [x,y], [x,y,z], {x,y}, {"0":x,"1":y}, or [[x,y]] */
 function parseG1(p) {
   if (Array.isArray(p)) {
@@ -85,7 +84,7 @@ function parseG2(p) {
   throw new Error(`Unrecognized G2 shape: ${JSON.stringify(p)}`);
 }
 
-// ---------- encoders ----------
+/* -------------------------------- encoders ------------------------------- */
 const encG1 = (p) => {
   const [x, y] = parseG1(p);
   return Buffer.concat([le32(x), le32(y)]); // 64 bytes
@@ -95,7 +94,7 @@ const encG2 = (p) => {
   return Buffer.concat([le32(x0), le32(x1), le32(y0), le32(y1)]); // 128 bytes
 };
 
-// ---------- conversion ----------
+/* ------------------------------- converters ------------------------------ */
 /** 256-byte Groth16 proof: pi_a(G1)||pi_b(G2)||pi_c(G1) */
 function convertProofToBinary(proof) {
   if (!proof || !proof.pi_a || !proof.pi_b || !proof.pi_c) {
@@ -114,7 +113,17 @@ function convertPublicSignalsToBinary(publicSignals) {
   return Buffer.concat(bufs);
 }
 
-// ---------- pretty labels (optional sanity) ----------
+/* --------------------------------- IO ----------------------------------- */
+function readJSON(p) {
+  if (!fs.existsSync(p)) throw new Error(`File not found: ${p}`);
+  return JSON.parse(fs.readFileSync(p, "utf8"));
+}
+
+function ensureDir(d) {
+  fs.mkdirSync(d, { recursive: true });
+}
+
+/* ---------------------------- labels/printing --------------------------- */
 const LABELS = {
   deposit: [
     "newCommitment",
@@ -138,21 +147,10 @@ const LABELS = {
   ],
   withdraw: ["nullifier", "merkleRoot", "recipientWalletPubKey", "amount", "tokenId"],
 };
+const baseName = (c) => c.replace(/\d+$/, "");
 
-// ---------- main per-circuit ----------
-async function generateBinaryProofs(circuit = "deposit", input = null) {
-  console.log(`📦 Generating ${circuit} proof...`);
-
-  const inObj = input || exampleInputs[circuit];
-  if (!inObj) throw new Error(`No example inputs found for circuit '${circuit}'`);
-
-  const { proof, publicSignals } = await generateProof(circuit, inObj);
-
-  console.log("✅ Proof generated!");
-  console.log(`📊 Public signals count: ${publicSignals.length}`);
-
-  // Pretty labels if we know the exact order/length
-  const labels = LABELS[circuit];
+function printLabeledIfKnown(circuit, publicSignals) {
+  const labels = LABELS[baseName(circuit)];
   if (labels && labels.length === publicSignals.length) {
     console.log("🔎 Public signals (labeled):");
     labels.forEach((k, i) => console.log(`  ${k} = ${publicSignals[i]}`));
@@ -160,108 +158,194 @@ async function generateBinaryProofs(circuit = "deposit", input = null) {
     console.log(`🔎 Public signals: ${publicSignals.join(", ")}`);
     if (labels) {
       console.warn(
-        `⚠️  Expected ${labels.length} signals for '${circuit}', got ${publicSignals.length}. ` +
-          "Double-check your circuit's public ordering."
+        `⚠️  Expected ${labels.length} signals for '${baseName(
+          circuit
+        )}', got ${publicSignals.length}. ` + "Double-check your circuit's public ordering."
       );
     }
   }
+}
 
-  // Convert
-  const proofBin = convertProofToBinary(proof);                  // 256 bytes
-  const pubBin = convertPublicSignalsToBinary(publicSignals);    // 32 * nPublic
-  const payloadBin = Buffer.concat([proofBin, pubBin]);          // One-shot blob
+/* ------------------------------ path helpers ---------------------------- */
+function resolveInPaths(buildRoot, circuit) {
+  const dir = path.join(buildRoot, circuit);
+  return {
+    dir,
+    proofJson: path.join(dir, "proof.json"),
+    publicsJson: path.join(dir, "public_signals.json"),
+  };
+}
 
-  // Save alongside your on-chain program
-  const outDir = path.join(__dirname, "..", "..", "cipherpay-anchor", "proofs");
-  fs.mkdirSync(outDir, { recursive: true });
+function resolveOutPaths(outRoot, circuit) {
+  const dir = outRoot; // flat output; filenames include suffix if present
+  ensureDir(dir);
+  return {
+    proofBin: path.join(dir, `${circuit}_proof.bin`),
+    publicsBin: path.join(dir, `${circuit}_public_signals.bin`),
+    payloadBin: path.join(dir, `${circuit}_payload.bin`),
+  };
+}
 
-  const proofPath = path.join(outDir, `${circuit}_proof.bin`);
-  const pubPath = path.join(outDir, `${circuit}_public_signals.bin`);
-  const payloadPath = path.join(outDir, `${circuit}_payload.bin`);
+/* ------------------------------ converters ------------------------------ */
+async function convertOne({ circuit, inDir, outDir }) {
+  const buildRoot = path.resolve(inDir);
+  const outRoot = path.resolve(outDir);
 
-  fs.writeFileSync(proofPath, proofBin);
-  fs.writeFileSync(pubPath, pubBin);
-  fs.writeFileSync(payloadPath, payloadBin);
+  console.log(`📦 Converting ${circuit} from JSON → binary …`);
+  const IN = resolveInPaths(buildRoot, circuit);
+  const OUT = resolveOutPaths(outRoot, circuit);
 
-  console.log("\n📁 Binary files saved:");
-  console.log(`  • Proof           : ${proofPath} (${proofBin.length} bytes)`);
-  console.log(`  • Public signals  : ${pubPath} (${pubBin.length} bytes)`);
+  // read JSON
+  const proof = readJSON(IN.proofJson);
+  const publicSignals = readJSON(IN.publicsJson);
+
+  // convert
+  const proofBin = convertProofToBinary(proof); // 256 bytes
+  const pubsBin = convertPublicSignalsToBinary(publicSignals);
+  const payloadBin = Buffer.concat([proofBin, pubsBin]);
+
+  // write
+  fs.writeFileSync(OUT.proofBin, proofBin);
+  fs.writeFileSync(OUT.publicsBin, pubsBin);
+  fs.writeFileSync(OUT.payloadBin, payloadBin);
+
+  // logs
+  console.log("✅ Converted!");
+  console.log(`  • Proof (256B): ${OUT.proofBin}`);
   console.log(
-    `  • Payload (concat) : ${payloadPath} (${payloadBin.length} bytes = 256 + 32 * ${publicSignals.length})\n`
+    `  • Publics (${publicSignals.length} × 32B = ${pubsBin.length}B): ${OUT.publicsBin}`
   );
+  console.log(
+    `  • Payload (${payloadBin.length}B = 256 + 32×${publicSignals.length}): ${OUT.payloadBin}`
+  );
+  printLabeledIfKnown(circuit, publicSignals);
 
   return {
-    proofPath,
-    pubPath,
-    payloadPath,
-    proofBytes: proofBin.length,
-    pubBytes: pubBin.length,
-    payloadBytes: payloadBin.length,
+    circuit,
+    proofPath: OUT.proofBin,
+    publicsPath: OUT.publicsBin,
+    payloadPath: OUT.payloadBin,
     nPublic: publicSignals.length,
   };
 }
 
-// ---------- batch helper ----------
-async function generateAll() {
-  console.log("🔧 Generating binary proof files for Solana integration...\n");
-  const circuits = ["deposit", "transfer", "withdraw"];
+async function convertMany({ circuits, inDir, outDir }) {
   const results = [];
-  for (const c of circuits) {
+  for (const circuit of circuits) {
     try {
-      results.push(await generateBinaryProofs(c));
+      results.push(await convertOne({ circuit, inDir, outDir }));
     } catch (e) {
-      console.error(`❌ ${c} failed: ${e.message || e}`);
+      console.error(`❌ ${circuit} failed: ${e.message || e}`);
     }
   }
   console.log("✅ Done.");
   return results;
 }
 
-// ---------- CLI ----------
+/* ------------------------------- circuit sets --------------------------- */
+// Pipelines A..D: suffix "" (A), "1" (B), "2" (C), "3" (D)
+const BASES = ["deposit", "transfer", "withdraw"];
+const SUFFIXES = ["", "1", "2", "3"];
+
+function circuitsForSuffix(sfx) {
+  return BASES.map((b) => b + sfx);
+}
+function allPipelineCircuits() {
+  return SUFFIXES.flatMap((sfx) => circuitsForSuffix(sfx));
+}
+
+/* ---------------------------------- CLI --------------------------------- */
+/*
+Usage examples:
+  # Convert all 12 circuits for pipelines A..D from build/* → ../cipherpay-anchor/proofs (or ./proofs)
+  node scripts/generate-bin-proofs.js --all
+
+  # Convert a specific circuit (supports suffixes):
+  node scripts/generate-bin-proofs.js transfer2
+
+  # Convert a whole pipeline (B only):
+  node scripts/generate-bin-proofs.js --pipeline=B
+
+  # Custom in/out directories:
+  node scripts/generate-bin-proofs.js --all --in=./build --out=../cipherpay-anchor/proofs
+
+Flags:
+  --in=<dir>        Input root (default: <repo>/build)
+  --out=<dir>       Output dir (default: <repo>/../cipherpay-anchor/proofs, fallback <repo>/proofs)
+  --all             Convert all pipelines A..D (deposit/transfer/withdraw × 4)
+  --pipeline=A|B|C|D   Convert only the specified pipeline
+*/
 if (require.main === module) {
   (async () => {
     try {
-      // usage:
-      //   node scripts/generate-binary-proofs.js                  -> deposit with example input
-      //   node scripts/generate-binary-proofs.js transfer         -> transfer with example input
-      //   node scripts/generate-binary-proofs.js withdraw         -> withdraw with example input
-      //   node scripts/generate-binary-proofs.js deposit -i in.json
-      //   node scripts/generate-binary-proofs.js --all
       const args = process.argv.slice(2);
       const isAll = args.includes("--all");
+      const inArg = args.find((a) => a.startsWith("--in="));
+      const outArg = args.find((a) => a.startsWith("--out="));
+      const pipelineArg = args.find((a) => a.startsWith("--pipeline="));
+      const repoRoot = path.join(__dirname, "..");
+
+      const inDir = inArg ? inArg.split("=")[1] : path.join(repoRoot, "build");
+
+      // Default out dir → ../../cipherpay-anchor/proofs (if exists), else <repo>/proofs
+      let defaultOut = path.resolve(path.join(repoRoot, "..", "cipherpay-anchor", "proofs"));
+      if (!fs.existsSync(path.join(repoRoot, "..", "cipherpay-anchor"))) {
+        defaultOut = path.join(repoRoot, "proofs");
+      }
+      const outDir = outArg ? outArg.split("=")[1] : defaultOut;
+
+      // If --all, do every pipeline A..D
       if (isAll) {
-        await generateAll();
+        await convertMany({ circuits: allPipelineCircuits(), inDir, outDir });
         process.exit(0);
       }
 
-      const circuit = args[0] && !args[0].startsWith("-") ? args[0] : "deposit";
-
-      let customInput = null;
-      const iPos = args.indexOf("-i");
-      if (iPos !== -1 && args[iPos + 1]) {
-        const p = path.resolve(args[iPos + 1]);
-        if (!fs.existsSync(p)) throw new Error(`Input file not found: ${p}`);
-        customInput = JSON.parse(fs.readFileSync(p, "utf8"));
+      // If --pipeline=*
+      if (pipelineArg) {
+        const p = pipelineArg.split("=")[1].toUpperCase();
+        const map = { A: "", B: "1", C: "2", D: "3" };
+        if (!(p in map)) throw new Error("Invalid --pipeline value. Use A, B, C, or D.");
+        const circuits = circuitsForSuffix(map[p]);
+        await convertMany({ circuits, inDir, outDir });
+        process.exit(0);
       }
 
-      await generateBinaryProofs(circuit, customInput);
+      // Otherwise, allow specific circuit names (space-separated), e.g. "deposit deposit1 transfer3"
+      const names = args.filter((a) => !a.startsWith("--"));
+      if (names.length === 0) {
+        // default single step = deposit (pipeline A)
+        await convertOne({ circuit: "deposit", inDir, outDir });
+        process.exit(0);
+      }
+
+      // validate each name
+      const validName = (n) => /^(deposit|transfer|withdraw)\d*$/.test(n);
+      const bad = names.find((n) => !validName(n));
+      if (bad) {
+        throw new Error(
+          `Unknown circuit '${bad}'. Use deposit|transfer|withdraw optionally with suffix 1|2|3, or --all / --pipeline=A|B|C|D.`
+        );
+      }
+
+      await convertMany({ circuits: names, inDir, outDir });
       process.exit(0);
     } catch (e) {
       console.error("❌ Error:", e.message || e);
       console.error(
         "   Hints:\n" +
-          "   • Ensure circuits are built and zkey/wasm exist (run scripts/setup.js).\n" +
-          "   • Public signals are written in exact Circom order (outputs first).\n" +
-          "   • deposit: depositHash = Poseidon(ownerCPPK, amount, nonce)."
+          "   • Ensure build/<circuit{,1,2,3}>/proof.json and public_signals.json exist (run your prover first).\n" +
+          "   • Public signals are written in the exact Circom order (outputs first, then public inputs).\n" +
+          "   • Use --pipeline=A|B|C|D to convert a single pipeline, or --all for A..D."
       );
       process.exit(1);
     }
   })();
 }
 
+/* ------------------------------- exports -------------------------------- */
 module.exports = {
-  generateBinaryProofs,
-  generateAll,
+  convertOne,
+  convertMany,
   _internals: {
     convertProofToBinary,
     convertPublicSignalsToBinary,
