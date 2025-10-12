@@ -2,6 +2,19 @@
 
 Zero-knowledge proof circuits for privacy-preserving payments with wallet-bound identities, encrypted note delivery, and Merkle tree integration.
 
+Usage - refer to package.json
+```bash
+npm run setup
+npm run convert-vk-to-bin
+npm run copy-keys
+npm run copy-proofs
+
+npm run generate-proof
+npm run generate-bin-proofs
+
+```
+
+
 ## Overview
 
 CipherPay circuits implement privacy-preserving payment functionality using Circom 2.1.4 and the Groth16 proving system. The circuits provide shielded transfers with wallet-bound identities, encrypted note delivery, and Merkle tree integration for enhanced privacy and security.
