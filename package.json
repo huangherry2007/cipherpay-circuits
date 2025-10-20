@@ -5,9 +5,9 @@
   "main": "index.js",
   "scripts": {
     "setup": "node scripts/setup.js",
-    "convert-vk-to-bin": "node scripts/convert-vk-to-bin.js --all",
-    "copy-keys": "node scripts/copy-verification-keys.js",
-    "copy-proofs": "node scripts/copy-proof-artifacts.js",
+    "convert-vk-to-bin-anchor": "node scripts/convert-vk-to-bin.js --all",
+    "copy-keys-to-relayer-and-anchor": "node scripts/copy-verification-keys.js",
+    "copy-proofs-artifacts-to-relayer": "node scripts/copy-proof-artifacts.js",
 
     "generate-proof": "node scripts/generate-example-proof.js all",
     "generate-bin-proofs": "node scripts/generate-bin-proofs.js --all",
