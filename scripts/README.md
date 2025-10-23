@@ -9,6 +9,7 @@ Builds all core circuits and generates proving/verification keys.
 
 **Usage:**
 ```bash
+nvm use 18   ### must use node v18
 npm run setup
 npm run generate-proof
 

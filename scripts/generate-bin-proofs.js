@@ -26,6 +26,7 @@ const normFq = (x) => {
   if (n < 0n) n += FQ;
   return n;
 };
+/** little-endian 32B */
 const le32 = (x) => {
   let v = normFq(x);
   const b = Buffer.alloc(32);
@@ -106,23 +107,6 @@ function convertProofToBinary(proof) {
   return Buffer.concat([a, b, c]);
 }
 
-/** Write ALL public signals in the exact order Circom produced them */
-function convertPublicSignalsToBinary(publicSignals) {
-  if (!Array.isArray(publicSignals)) throw new Error("publicSignals must be an array");
-  const bufs = publicSignals.map((s) => le32(s));
-  return Buffer.concat(bufs);
-}
-
-/* --------------------------------- IO ----------------------------------- */
-function readJSON(p) {
-  if (!fs.existsSync(p)) throw new Error(`File not found: ${p}`);
-  return JSON.parse(fs.readFileSync(p, "utf8"));
-}
-
-function ensureDir(d) {
-  fs.mkdirSync(d, { recursive: true });
-}
-
 /* ---------------------------- labels/printing --------------------------- */
 const LABELS = {
   deposit: [
@@ -145,25 +129,35 @@ const LABELS = {
     "encNote1Hash",
     "encNote2Hash",
   ],
-  withdraw: ["nullifier", "merkleRoot", "recipientWalletPubKey", "amount", "tokenId"],
+  // UPDATED withdraw layout (7 items):
+  // [ nullifier, merkleRoot, recipientOwner_lo, recipientOwner_hi, recipientWalletPubKey, amount, tokenId ]
+  withdraw: [
+    "nullifier",
+    "merkleRoot",
+    "recipientOwner_lo",
+    "recipientOwner_hi",
+    "recipientWalletPubKey",
+    "amount",
+    "tokenId",
+  ],
 };
 const baseName = (c) => c.replace(/\d+$/, "");
 
-function printLabeledIfKnown(circuit, publicSignals) {
-  const labels = LABELS[baseName(circuit)];
-  if (labels && labels.length === publicSignals.length) {
-    console.log("🔎 Public signals (labeled):");
-    labels.forEach((k, i) => console.log(`  ${k} = ${publicSignals[i]}`));
-  } else {
-    console.log(`🔎 Public signals: ${publicSignals.join(", ")}`);
-    if (labels) {
-      console.warn(
-        `⚠️  Expected ${labels.length} signals for '${baseName(
-          circuit
-        )}', got ${publicSignals.length}. ` + "Double-check your circuit's public ordering."
-      );
-    }
-  }
+/* --------------------------------- IO ----------------------------------- */
+function readJSON(p) {
+  if (!fs.existsSync(p)) throw new Error(`File not found: ${p}`);
+  return JSON.parse(fs.readFileSync(p, "utf8"));
+}
+function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
+
+/* --------- public signals encoder (LE for all; limbs need no special) --- */
+function convertPublicSignalsToBinary(publicSignals /* array */, circuit) {
+  if (!Array.isArray(publicSignals)) throw new Error("publicSignals must be an array");
+
+  // After the limbs refactor, EVERYTHING is encoded as 32-byte little-endian.
+  // For withdraw, indices 2 and 3 are recipientOwner_lo/hi. Each is < 2^128,
+  // so their LE-encoded 32B will have the 16 low bytes carry the limb, rest zero.
+  return Buffer.concat(publicSignals.map((s) => le32(s)));
 }
 
 /* ------------------------------ path helpers ---------------------------- */
@@ -175,7 +169,6 @@ function resolveInPaths(buildRoot, circuit) {
     publicsJson: path.join(dir, "public_signals.json"),
   };
 }
-
 function resolveOutPaths(outRoot, circuit) {
   const dir = outRoot; // flat output; filenames include suffix if present
   ensureDir(dir);
@@ -201,7 +194,7 @@ async function convertOne({ circuit, inDir, outDir }) {
 
   // convert
   const proofBin = convertProofToBinary(proof); // 256 bytes
-  const pubsBin = convertPublicSignalsToBinary(publicSignals);
+  const pubsBin = convertPublicSignalsToBinary(publicSignals, circuit);
   const payloadBin = Buffer.concat([proofBin, pubsBin]);
 
   // write
@@ -218,7 +211,15 @@ async function convertOne({ circuit, inDir, outDir }) {
   console.log(
     `  • Payload (${payloadBin.length}B = 256 + 32×${publicSignals.length}): ${OUT.payloadBin}`
   );
-  printLabeledIfKnown(circuit, publicSignals);
+
+  // pretty print when labels size matches
+  const labels = LABELS[baseName(circuit)];
+  if (labels && labels.length === publicSignals.length) {
+    console.log("🔎 Public signals (labeled):");
+    labels.forEach((k, i) => console.log(`  ${k} = ${publicSignals[i]}`));
+  } else {
+    console.log(`🔎 Public signals: ${publicSignals.join(", ")}`);
+  }
 
   return {
     circuit,
@@ -243,38 +244,12 @@ async function convertMany({ circuits, inDir, outDir }) {
 }
 
 /* ------------------------------- circuit sets --------------------------- */
-// Pipelines A..D: suffix "" (A), "1" (B), "2" (C), "3" (D)
 const BASES = ["deposit", "transfer", "withdraw"];
 const SUFFIXES = ["", "1", "2", "3"];
-
-function circuitsForSuffix(sfx) {
-  return BASES.map((b) => b + sfx);
-}
-function allPipelineCircuits() {
-  return SUFFIXES.flatMap((sfx) => circuitsForSuffix(sfx));
-}
+const circuitsForSuffix = (sfx) => BASES.map((b) => b + sfx);
+const allPipelineCircuits = () => SUFFIXES.flatMap((sfx) => circuitsForSuffix(sfx));
 
 /* ---------------------------------- CLI --------------------------------- */
-/*
-Usage examples:
-  # Convert all 12 circuits for pipelines A..D from build/* → ../cipherpay-anchor/proofs (or ./proofs)
-  node scripts/generate-bin-proofs.js --all
-
-  # Convert a specific circuit (supports suffixes):
-  node scripts/generate-bin-proofs.js transfer2
-
-  # Convert a whole pipeline (B only):
-  node scripts/generate-bin-proofs.js --pipeline=B
-
-  # Custom in/out directories:
-  node scripts/generate-bin-proofs.js --all --in=./build --out=../cipherpay-anchor/proofs
-
-Flags:
-  --in=<dir>        Input root (default: <repo>/build)
-  --out=<dir>       Output dir (default: <repo>/../cipherpay-anchor/proofs, fallback <repo>/proofs)
-  --all             Convert all pipelines A..D (deposit/transfer/withdraw × 4)
-  --pipeline=A|B|C|D   Convert only the specified pipeline
-*/
 if (require.main === module) {
   (async () => {
     try {
@@ -294,13 +269,11 @@ if (require.main === module) {
       }
       const outDir = outArg ? outArg.split("=")[1] : defaultOut;
 
-      // If --all, do every pipeline A..D
       if (isAll) {
         await convertMany({ circuits: allPipelineCircuits(), inDir, outDir });
         process.exit(0);
       }
 
-      // If --pipeline=*
       if (pipelineArg) {
         const p = pipelineArg.split("=")[1].toUpperCase();
         const map = { A: "", B: "1", C: "2", D: "3" };
@@ -310,15 +283,12 @@ if (require.main === module) {
         process.exit(0);
       }
 
-      // Otherwise, allow specific circuit names (space-separated), e.g. "deposit deposit1 transfer3"
       const names = args.filter((a) => !a.startsWith("--"));
       if (names.length === 0) {
-        // default single step = deposit (pipeline A)
         await convertOne({ circuit: "deposit", inDir, outDir });
         process.exit(0);
       }
 
-      // validate each name
       const validName = (n) => /^(deposit|transfer|withdraw)\d*$/.test(n);
       const bad = names.find((n) => !validName(n));
       if (bad) {
@@ -335,6 +305,7 @@ if (require.main === module) {
         "   Hints:\n" +
           "   • Ensure build/<circuit{,1,2,3}>/proof.json and public_signals.json exist (run your prover first).\n" +
           "   • Public signals are written in the exact Circom order (outputs first, then public inputs).\n" +
+          "   • Withdraw now exports 7 publics (lo/hi limbs). Update on-chain length checks to 7*32.\n" +
           "   • Use --pipeline=A|B|C|D to convert a single pipeline, or --all for A..D."
       );
       process.exit(1);
@@ -342,13 +313,10 @@ if (require.main === module) {
   })();
 }
 
-/* ------------------------------- exports -------------------------------- */
 module.exports = {
   convertOne,
   convertMany,
   _internals: {
-    convertProofToBinary,
-    convertPublicSignalsToBinary,
     parseG1,
     parseG2,
     le32,

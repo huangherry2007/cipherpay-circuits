@@ -5,12 +5,16 @@
   "main": "index.js",
   "scripts": {
     "setup": "node scripts/setup.js",
-    "convert-vk-to-bin-anchor": "node scripts/convert-vk-to-bin.js --all",
-    "copy-keys-to-relayer-and-anchor": "node scripts/copy-verification-keys.js",
-    "copy-proofs-artifacts-to-relayer": "node scripts/copy-proof-artifacts.js",
+    "convert-vk-bin-to-anchor": "node scripts/convert-vk-bin-to-anchor.js --all",
 
-    "generate-proof": "node scripts/generate-example-proof.js all",
+
+    "copy-vk-to-relayer": "node scripts/copy-vk-to-relayer.js",
+    "copy-proof-artifacts-to-relayer": "node scripts/copy-proof-artifacts-to-relayer.js",
+
+
+    "generate-example-proofs": "node scripts/generate-example-proofs.js all",
     "generate-bin-proofs": "node scripts/generate-bin-proofs.js --all",
+
 
     "clean": "rm -rf build/",
     "clean:all": "rm -rf build/ node_modules/ package-lock.json"
@@ -49,6 +53,7 @@
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
+    "bs58": "^6.0.0",
     "jest": "29.3.1"
   },
   "jest": {
