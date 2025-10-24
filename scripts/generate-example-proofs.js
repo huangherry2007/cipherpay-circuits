@@ -449,12 +449,9 @@ function toBytes32FromAny(ownerAny) {
 function withWithdrawDefaults(inp = {}) {
   const z = "0";
   const ownerAny = inp.recipientOwnerSol ?? envRecipientOwnerAny();
-  const rawBE = toBytes32FromAny(ownerAny);
-  // Public signals are LE; base58/hex sources are in canonical order (treat as BE).
-  // Reverse the whole 32-byte array to get an overall LE byte layout before chunking.
-  const rawLE = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) rawLE[i] = rawBE[31 - i];
-  const { lo, hi } = limbsLEFromBytes32(rawLE);
+  const raw = toBytes32FromAny(ownerAny);        // 32 bytes in Solana's canonical order
+  // Split into two 16-byte chunks; interpret each chunk as a little-endian integer.
+  const { lo, hi } = limbsLEFromBytes32(raw);
   console.log("• (withdraw) recipientOwner (base58/hex) provided");
   console.log("• (withdraw) limb lo =", lo);
   console.log("• (withdraw) limb hi =", hi);
