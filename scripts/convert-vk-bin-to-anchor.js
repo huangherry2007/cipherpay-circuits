@@ -247,7 +247,7 @@ function printHelp() {
   node scripts/convert-vk-to-bin.js -i <verification_key.json> -o <output.bin> [options]
 
 Options:
-  --endianness=<le|be>     Field-element endianness (default: le)
+  --endianness=<le|be>     Field-element endianness (default: be)
   --include-alphabeta      Include vk_alphabeta_12 if present (default: off)
   --ic=<nPublic>           Override nPublic (IC must then be nPublic+1)
   --force                  Do not abort on IC length mismatch; print warning instead
