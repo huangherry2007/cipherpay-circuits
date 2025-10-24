@@ -8,9 +8,7 @@ const path = require("path");
 const { groth16 } = require("snarkjs");
 const circomlib = require("circomlibjs");
 
-/* ---------------- BN254 prime (for bounds/byte helpers) ----------------- */
-const FQ =
-  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+// (no globals needed here)
 
 /* ---------------- Robust base58 (decode) -------------------------------- */
 let bs58decode;
@@ -169,7 +167,7 @@ const exampleInputs = {
     tokenId: "0",
     memo: "0",
     inPathElements: Array(16).fill("0"),
-    inPathIndices: Array(16).fill("0"),
+    inPathIndices: Array(16).fill(0),
     nextLeafIndex: "6",
     nonce: "2",
     amount: "300",
@@ -415,7 +413,11 @@ function envRecipientOwnerAny() {
          process.env.RECIPIENT_OWNER_SOL_HEX ||
          undefined;
 }
-/** split 32 bytes into two 16-byte little-endian limbs -> decimal strings */
+/**
+ * Split a 32-byte identifier into two 16-byte *little-endian* limbs (decimal strings).
+ * IMPORTANT: callers should pass the 32 bytes already oriented as LE overall,
+ * i.e., if source buffer is in canonical (big-endian/network) order, reverse it first.
+ */
 function limbsLEFromBytes32(bytes32) {
   if (!(bytes32 instanceof Uint8Array) || bytes32.length !== 32) {
     throw new Error("recipient owner must be 32 bytes");
@@ -447,8 +449,12 @@ function toBytes32FromAny(ownerAny) {
 function withWithdrawDefaults(inp = {}) {
   const z = "0";
   const ownerAny = inp.recipientOwnerSol ?? envRecipientOwnerAny();
-  const raw = toBytes32FromAny(ownerAny);
-  const { lo, hi } = limbsLEFromBytes32(raw);
+  const rawBE = toBytes32FromAny(ownerAny);
+  // Public signals are LE; base58/hex sources are in canonical order (treat as BE).
+  // Reverse the whole 32-byte array to get an overall LE byte layout before chunking.
+  const rawLE = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) rawLE[i] = rawBE[31 - i];
+  const { lo, hi } = limbsLEFromBytes32(rawLE);
   console.log("• (withdraw) recipientOwner (base58/hex) provided");
   console.log("• (withdraw) limb lo =", lo);
   console.log("• (withdraw) limb hi =", hi);
