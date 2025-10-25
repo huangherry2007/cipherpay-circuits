@@ -6,7 +6,8 @@ include "../nullifier/nullifier.circom";
 include "../note_commitment/note_commitment.circom";
 
 // CipherPay Withdraw Circuit (parameterized Merkle depth)
-// Public signals (in order): [ nullifier, merkleRoot, recipientWalletPubKey, amount, tokenId ]
+// NEW public signals order (outputs first, then public inputs):
+// [ nullifier, merkleRoot, recipientOwner_lo, recipientOwner_hi, recipientWalletPubKey, amount, tokenId ]
 template Withdraw(depth) {
     // === Private inputs ===
     signal input recipientWalletPrivKey;      // recipient L1 private key
@@ -17,6 +18,17 @@ template Withdraw(depth) {
     signal input commitment;                  // PRIVATE: expected note commitment
 
     // === Public inputs ===
+    //
+    // Solana recipient owner pubkey (32 bytes) split into two 128-bit LE limbs:
+    //   - recipientOwner_lo: LE integer of bytes[ 0..16)
+    //   - recipientOwner_hi: LE integer of bytes[16..32)
+    //
+    // These are *not* used in arithmetic; they are exposed so the on-chain
+    // program can reconstruct the 32-byte Pubkey and compare to recipient_owner.
+    signal input recipientOwner_lo;           // low 128 bits (LE)
+    signal input recipientOwner_hi;           // high 128 bits (LE)
+
+    // Existing UI-ish public inputs
     signal input recipientWalletPubKey;       // recipient L1 public key
     signal input amount;                      // note amount
     signal input tokenId;                     // note token id
@@ -52,8 +64,11 @@ template Withdraw(depth) {
     nul.randomness      <== randomness;
     nul.tokenId         <== tokenId;
     nullifier           <== nul.nullifier;
+
+    // NOTE: no arithmetic constraints on recipientOwner_lo/hi.
+    // They are public-only for on-chain equality checking.
 }
 
-// Outputs first, then public inputs:
-// [ nullifier, merkleRoot, recipientWalletPubKey, amount, tokenId ]
-component main { public [recipientWalletPubKey, amount, tokenId] } = Withdraw(16);
+// Outputs first, then declared `public` inputs become public signals in this order:
+// [ nullifier, merkleRoot, recipientOwner_lo, recipientOwner_hi, recipientWalletPubKey, amount, tokenId ]
+component main { public [recipientOwner_lo, recipientOwner_hi, recipientWalletPubKey, amount, tokenId] } = Withdraw(16);

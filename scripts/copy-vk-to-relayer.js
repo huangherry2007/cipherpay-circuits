@@ -77,7 +77,7 @@ const copyVerificationKeys = async () => {
     } else {
       console.log('\n💥 No verification keys were copied. Please check the source directory.');
     }
-
+    process.exit(0);
   } catch (error) {
     console.error('💥 Fatal error during copy process:', error.message);
     process.exit(1);

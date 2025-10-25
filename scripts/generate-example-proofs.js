@@ -1,16 +1,6 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
 
-// JSON-only proof generation for:
-// Pipelines A..D on the SAME tree:
-//   A: deposit  -> transfer  -> withdraw
-//   B: deposit1 -> transfer1 -> withdraw1
-//   C: deposit2 -> transfer2 -> withdraw2
-//   D: deposit3 -> transfer3 -> withdraw3
-//
-// It also supports running any single step by name:
-//   node scripts/generate-example-proof.js deposit|transfer|withdraw|deposit1|...
-
 "use strict";
 
 const fs = require("fs");
@@ -18,7 +8,47 @@ const path = require("path");
 const { groth16 } = require("snarkjs");
 const circomlib = require("circomlibjs");
 
-/* ---------------- example inputs ---------------- */
+// (no globals needed here)
+
+/* ---------------- Robust base58 (decode) -------------------------------- */
+let bs58decode;
+try {
+  const mod = require("bs58");
+  const m = (mod && mod.decode) ? mod : (mod && mod.default) ? mod.default : mod;
+  if (m && typeof m.decode === "function") bs58decode = m.decode;
+} catch (_) {}
+if (!bs58decode) {
+  const ALPH = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const MAP = new Map([...ALPH].map((c, i) => [c, i]));
+  bs58decode = function (s) {
+    if (typeof s !== "string") throw new Error("base58 string required");
+    let num = 0n;
+    for (const ch of s) {
+      const v = MAP.get(ch);
+      if (v === undefined) throw new Error(`invalid base58 char '${ch}'`);
+      num = num * 58n + BigInt(v);
+    }
+    const arr = [];
+    while (num > 0n) { arr.push(Number(num & 0xffn)); num >>= 8n; }
+    arr.reverse();
+    let z = 0; for (const ch of s) { if (ch === "1") z++; else break; }
+    const out = new Uint8Array(z + arr.length);
+    out.set(arr, z);
+    return out;
+  };
+}
+
+/* ---------------- small io helpers ------------------------------------- */
+function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
+function readJSON(file, fallback = null) { if (!fs.existsSync(file)) return fallback; return JSON.parse(fs.readFileSync(file, "utf8")); }
+function writeJSON(file, obj) { ensureDir(path.dirname(file)); fs.writeFileSync(file, JSON.stringify(obj, null, 2)); }
+function mustExist(file, hint) { if (!fs.existsSync(file)) throw new Error(`${hint} not found at ${file}. Please compile circuits first.`); }
+
+/* ---------------- bigint helpers --------------------------------------- */
+function toBig(x) { if (typeof x === "bigint") return x; if (typeof x === "number") return BigInt(x); if (typeof x === "string") return BigInt(x.trim()); throw new Error(`Cannot convert to BigInt: ${x}`); }
+const bigToDec = (x) => x.toString(10);
+
+/* ---------------- example inputs (your originals) ----------------------- */
 const exampleInputs = {
   // -------- Pipeline A --------
   deposit: {
@@ -35,7 +65,6 @@ const exampleInputs = {
   },
 
   transfer: {
-    // input (the deposit note)
     inAmount: "100",
     inSenderWalletPubKey: "0",
     inSenderWalletPrivKey: "0",
@@ -43,7 +72,6 @@ const exampleInputs = {
     inTokenId: "0",
     inMemo: "0",
 
-    // outputs (we later spend out2)
     out1Amount: "60",
     out1RecipientCipherPayPubKey:
       "5555555555555555555555555555555555555555555555555555555555555555",
@@ -62,6 +90,8 @@ const exampleInputs = {
   },
 
   withdraw: {
+    // stays as base58 here; we convert to LO/HI limbs below
+    recipientOwnerSol: "8VMCHPzwug9rYYudXkLNYTtAGN96ht4mXaqrxHrTijRg",
     recipientWalletPubKey:
       "1234567890123456789012345678901234567890123456789012345678901234",
     recipientWalletPrivKey:
@@ -115,6 +145,7 @@ const exampleInputs = {
   },
 
   withdraw1: {
+    recipientOwnerSol: "8VMCHPzwug9rYYudXkLNYTtAGN96ht4mXaqrxHrTijRg",
     recipientWalletPubKey:
       "1234567890123456789012345678901234567890123456789012345678901234",
     recipientWalletPrivKey:
@@ -127,6 +158,7 @@ const exampleInputs = {
     pathElements: Array(16).fill("0"),
     pathIndices: Array(16).fill(0),
   },
+
   // -------- Pipeline C --------
   deposit2: {
     ownerWalletPubKey: "0",
@@ -167,6 +199,7 @@ const exampleInputs = {
   },
 
   withdraw2: {
+    recipientOwnerSol: "8VMCHPzwug9rYYudXkLNYTtAGN96ht4mXaqrxHrTijRg",
     recipientWalletPubKey:
       "1234567890123456789012345678901234567890123456789012345678901234",
     recipientWalletPrivKey:
@@ -219,8 +252,8 @@ const exampleInputs = {
     out2Memo: "0",
   },
 
-  // If withdraw3 is missing, we'll fall back to base "withdraw" defaults
   withdraw3: {
+    recipientOwnerSol: "8VMCHPzwug9rYYudXkLNYTtAGN96ht4mXaqrxHrTijRg",
     recipientWalletPubKey:
       "1234567890123456789012345678901234567890123456789012345678901234",
     recipientWalletPrivKey:
@@ -235,8 +268,8 @@ const exampleInputs = {
   },
 };
 
-/* ---------------- labels (publicSignals order) ---------------- */
-// Transfer outputs are public by default in Circom 2; then we add two public inputs.
+/* ---------------- labels (publicSignals order) -------------------------- */
+/* Transfer unchanged. Withdraw now has 7 items w/ LO/HI limbs */
 const LABELS = {
   deposit: [
     "newCommitment",
@@ -258,7 +291,17 @@ const LABELS = {
     "encNote1Hash",
     "encNote2Hash",
   ],
-  withdraw: ["nullifier", "merkleRoot", "recipientWalletPubKey", "amount", "tokenId"],
+  // withdraw publics (7):
+  // [ nullifier, merkleRoot, recipientOwner_lo, recipientOwner_hi, recipientWalletPubKey, amount, tokenId ]
+  withdraw: [
+    "nullifier",
+    "merkleRoot",
+    "recipientOwner_lo",
+    "recipientOwner_hi",
+    "recipientWalletPubKey",
+    "amount",
+    "tokenId",
+  ],
 };
 const labelKey = (name) => (LABELS[name] ? name : name.replace(/\d+$/, ""));
 
@@ -269,7 +312,6 @@ const DEFAULT_DEPTH =
 const BUILD = path.resolve(__dirname, "../build");
 const SUFFIXES = ["", "1", "2", "3"]; // A..D
 
-// Reuse the same wasm/zkey but write to separate subdirs for numbered variants
 const CIRCUITS = {};
 for (const base of ["deposit", "transfer", "withdraw"]) {
   for (const sfx of SUFFIXES) {
@@ -282,18 +324,6 @@ for (const base of ["deposit", "transfer", "withdraw"]) {
     };
   }
 }
-
-// parse indices from LABELS
-const IDX = {
-  deposit: { COMMITMENT: LABELS.deposit.indexOf("newCommitment") },
-  transfer: {
-    OUT1: LABELS.transfer.indexOf("outCommitment1"),
-    OUT2: LABELS.transfer.indexOf("outCommitment2"),
-    NEW_ROOT1: LABELS.transfer.indexOf("newMerkleRoot1"),
-    NEW_ROOT2: LABELS.transfer.indexOf("newMerkleRoot2"),
-    NEXT_LEAF_INDEX: LABELS.transfer.indexOf("newNextLeafIndex"),
-  },
-};
 
 /* ================== Whitelist the inputs per circuit ==================== */
 const ALLOWED_INPUTS = {
@@ -312,21 +342,17 @@ const ALLOWED_INPUTS = {
     "oldMerkleRoot",
   ]),
   transfer: new Set([
-    // input note preimage
     "inAmount",
     "inSenderWalletPubKey",
     "inSenderWalletPrivKey",
     "inRandomness",
     "inTokenId",
     "inMemo",
-    // membership path for the input note
     "inPathElements",
     "inPathIndices",
-    // insertion info
     "nextLeafIndex",
     "out1PathElements",
     "out2PathElements",
-    // outputs (note preimages)
     "out1Amount",
     "out1RecipientCipherPayPubKey",
     "out1Randomness",
@@ -337,11 +363,13 @@ const ALLOWED_INPUTS = {
     "out2Randomness",
     "out2TokenId",
     "out2Memo",
-    // public inputs
     "encNote1Hash",
     "encNote2Hash",
   ]),
+  // UPDATED: accept limbs instead of single scalar
   withdraw: new Set([
+    "recipientOwner_lo",
+    "recipientOwner_hi",
     "recipientWalletPubKey",
     "recipientWalletPrivKey",
     "amount",
@@ -354,6 +382,7 @@ const ALLOWED_INPUTS = {
   ]),
 };
 
+/* ===================== Utilities (sanitizers etc.) ====================== */
 const baseCircuit = (c) => c.replace(/\d+$/, "");
 function sanitizeInputs(circuit, obj) {
   const allow = ALLOWED_INPUTS[baseCircuit(circuit)];
@@ -361,75 +390,6 @@ function sanitizeInputs(circuit, obj) {
   for (const k of Object.keys(obj || {})) if (allow.has(k)) out[k] = obj[k];
   return out;
 }
-
-/* ---- required-input defaults (all strings) ---- */
-function withDepositDefaults(inp = {}) {
-  return {
-    ownerWalletPubKey:   inp.ownerWalletPubKey   ?? "0",
-    ownerWalletPrivKey:  inp.ownerWalletPrivKey  ?? "0",
-    randomness:          inp.randomness          ?? "0",
-    tokenId:             inp.tokenId             ?? "0",
-    memo:                inp.memo                ?? "0",
-  };
-}
-function withTransferDefaults(inp = {}) {
-  const z = "0";
-  return {
-    // input note
-    inAmount:                 inp.inAmount                 ?? z,
-    inSenderWalletPubKey:     inp.inSenderWalletPubKey     ?? z,
-    inSenderWalletPrivKey:    inp.inSenderWalletPrivKey    ?? z,
-    inRandomness:             inp.inRandomness             ?? z,
-    inTokenId:                inp.inTokenId                ?? z,
-    inMemo:                   inp.inMemo                   ?? z,
-    // out1
-    out1Amount:               inp.out1Amount               ?? z,
-    out1RecipientCipherPayPubKey: inp.out1RecipientCipherPayPubKey ?? z,
-    out1Randomness:           inp.out1Randomness           ?? z,
-    out1TokenId:              inp.out1TokenId              ?? z,
-    out1Memo:                 inp.out1Memo                 ?? z,
-    // out2
-    out2Amount:               inp.out2Amount               ?? z,
-    out2RecipientCipherPayPubKey: inp.out2RecipientCipherPayPubKey ?? z,
-    out2Randomness:           inp.out2Randomness           ?? z,
-    out2TokenId:              inp.out2TokenId              ?? z,
-    out2Memo:                 inp.out2Memo                 ?? z,
-  };
-}
-function withWithdrawDefaults(inp = {}) {
-  const z = "0";
-  return {
-    recipientWalletPubKey:  inp.recipientWalletPubKey  ?? z,
-    recipientWalletPrivKey: inp.recipientWalletPrivKey ?? z,
-    amount:                 inp.amount                 ?? z,
-    tokenId:                inp.tokenId                ?? z,
-    randomness:             inp.randomness             ?? z,
-    memo:                   inp.memo                   ?? z,
-  };
-}
-
-/* ============================== IO Helpers ============================== */
-function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
-function readJSON(file, fallback = null) {
-  if (!fs.existsSync(file)) return fallback;
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-function writeJSON(file, obj) {
-  ensureDir(path.dirname(file));
-  fs.writeFileSync(file, JSON.stringify(obj, null, 2));
-}
-function mustExist(file, hint) {
-  if (!fs.existsSync(file)) throw new Error(`${hint} not found at ${file}. Please compile circuits first.`);
-}
-
-/* ========================= BigInt & field utils ======================== */
-function toBig(x) {
-  if (typeof x === "bigint") return x;
-  if (typeof x === "number") return BigInt(x);
-  if (typeof x === "string") return BigInt(x.trim());
-  throw new Error(`Cannot convert to BigInt: ${x}`);
-}
-const bigToDec = (x) => x.toString(10);
 function lsbBits(n, len) {
   const out = new Array(len);
   for (let i = 0; i < len; i++) out[i] = (n >> i) & 1 ? 1 : 0;
@@ -443,6 +403,100 @@ function poseidon3(F, P, a, b, c) {
 }
 function poseidon5(F, P, a, b, c, d, e) {
   return F.toObject(P([toBig(a), toBig(b), toBig(c), toBig(d), toBig(e)]));
+}
+
+/* -------- recipientOwner binding: to two 128-bit LE limbs --------------- */
+function envRecipientOwnerAny() {
+  // Prefer base58; allow 32-byte hex too (RECIPIENT_OWNER_SOL_HEX)
+  return process.env.RECIPIENT_OWNER_SOL_B58 ||
+         process.env.RECIPIENT_OWNER_SOL ||
+         process.env.RECIPIENT_OWNER_SOL_HEX ||
+         undefined;
+}
+/**
+ * Split a 32-byte identifier into two 16-byte *little-endian* limbs (decimal strings).
+ * IMPORTANT: callers should pass the 32 bytes already oriented as LE overall,
+ * i.e., if source buffer is in canonical (big-endian/network) order, reverse it first.
+ */
+function limbsLEFromBytes32(bytes32) {
+  if (!(bytes32 instanceof Uint8Array) || bytes32.length !== 32) {
+    throw new Error("recipient owner must be 32 bytes");
+  }
+  const leToBig = (bytes) => {
+    let x = 0n;
+    for (let i = 0; i < bytes.length; i++) x += BigInt(bytes[i]) << (8n * BigInt(i));
+    return x;
+  };
+  const lo = leToBig(bytes32.slice(0, 16));
+  const hi = leToBig(bytes32.slice(16, 32));
+  // 2^128 < FQ so each limb fits; no need to mod F
+  return { lo: lo.toString(10), hi: hi.toString(10) };
+}
+function toBytes32FromAny(ownerAny) {
+  const s = String(ownerAny || "").trim();
+  if (!s) throw new Error("recipient owner not provided (env or example JSON)");
+  if (/^(0x)?[0-9a-fA-F]{64}$/.test(s)) {
+    const h = s.startsWith("0x") ? s.slice(2) : s;
+    const out = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+    return out;
+  }
+  // otherwise assume base58
+  const raw = bs58decode(s);
+  if (raw.length !== 32) throw new Error("recipientOwner (base58) must decode to 32 bytes");
+  return raw;
+}
+function withWithdrawDefaults(inp = {}) {
+  const z = "0";
+  const ownerAny = inp.recipientOwnerSol ?? envRecipientOwnerAny();
+  const raw = toBytes32FromAny(ownerAny);        // 32 bytes in Solana's canonical order
+  // Split into two 16-byte chunks; interpret each chunk as a little-endian integer.
+  const { lo, hi } = limbsLEFromBytes32(raw);
+  console.log("• (withdraw) recipientOwner (base58/hex) provided");
+  console.log("• (withdraw) limb lo =", lo);
+  console.log("• (withdraw) limb hi =", hi);
+  return {
+    recipientOwner_lo:        lo,
+    recipientOwner_hi:        hi,
+    recipientWalletPubKey:    inp.recipientWalletPubKey   ?? z,
+    recipientWalletPrivKey:   inp.recipientWalletPrivKey  ?? z,
+    amount:                   inp.amount                  ?? z,
+    tokenId:                  inp.tokenId                 ?? z,
+    randomness:               inp.randomness              ?? z,
+    memo:                     inp.memo                    ?? z,
+  };
+}
+
+/* ---- defaults for deposit/transfer (unchanged) ------------------------- */
+function withDepositDefaults(inp = {}) {
+  return {
+    ownerWalletPubKey:   inp.ownerWalletPubKey   ?? "0",
+    ownerWalletPrivKey:  inp.ownerWalletPrivKey  ?? "0",
+    randomness:          inp.randomness          ?? "0",
+    tokenId:             inp.tokenId             ?? "0",
+    memo:                inp.memo                ?? "0",
+  };
+}
+function withTransferDefaults(inp = {}) {
+  const z = "0";
+  return {
+    inAmount:                 inp.inAmount                 ?? z,
+    inSenderWalletPubKey:     inp.inSenderWalletPubKey     ?? z,
+    inSenderWalletPrivKey:    inp.inSenderWalletPrivKey    ?? z,
+    inRandomness:             inp.inRandomness             ?? z,
+    inTokenId:                inp.inTokenId                ?? z,
+    inMemo:                   inp.inMemo                   ?? z,
+    out1Amount:               inp.out1Amount               ?? z,
+    out1RecipientCipherPayPubKey: inp.out1RecipientCipherPayPubKey ?? z,
+    out1Randomness:           inp.out1Randomness           ?? z,
+    out1TokenId:              inp.out1TokenId              ?? z,
+    out1Memo:                 inp.out1Memo                 ?? z,
+    out2Amount:               inp.out2Amount               ?? z,
+    out2RecipientCipherPayPubKey: inp.out2RecipientCipherPayPubKey ?? z,
+    out2Randomness:           inp.out2Randomness           ?? z,
+    out2TokenId:              inp.out2TokenId              ?? z,
+    out2Memo:                 inp.out2Memo                 ?? z,
+  };
 }
 
 /* ======================= Poseidon Merkle Tree ========================== */
@@ -513,7 +567,8 @@ class PoseidonTree {
   }
 }
 
-/* ===== recompute newRoot1/newRoot2 like the patched Transfer circuit ==== */
+/* ===== recompute newRoot1/newRoot2 like patched Transfer circuit ======= */
+function lsbBitsArray(n, len) { return lsbBits(n, len); }
 function computeNewRootsForTransfer({
   poseidon, depth, nextLeafIndex,
   out1PathElements, out2PathElements,
@@ -521,8 +576,7 @@ function computeNewRootsForTransfer({
 }) {
   const P = poseidon, F = P.F;
 
-  // Step 7: insertion #1 (out1) using out1PathElements at index = nextLeafIndex
-  const bits1 = lsbBits(nextLeafIndex, depth);
+  const bits1 = lsbBitsArray(nextLeafIndex, depth);
   const cur1 = new Array(depth + 1);
   cur1[0] = toBig(outCommitment1);
 
@@ -535,14 +589,12 @@ function computeNewRootsForTransfer({
   }
   const newRoot1 = cur1[depth];
 
-  // Step 8: insertion #2 (out2) at index = nextLeafIndex + 1
   const nextIdx1 = nextLeafIndex + 1;
-  const bits2 = lsbBits(nextIdx1, depth);
+  const bits2 = lsbBitsArray(nextIdx1, depth);
 
   const cur2 = new Array(depth + 1);
   cur2[0] = toBig(outCommitment2);
 
-  // Level 0 sibling selection per patched circuit:
   const b1 = bits1[0] ? 1n : 0n;
   const t0 = toBig(out2PathElements[0]) - toBig(outCommitment1);
   const sib0 = toBig(outCommitment1) + b1 * t0;
@@ -552,7 +604,6 @@ function computeNewRootsForTransfer({
   const right0 = b0_2 ? cur2[0] : sib0;
   cur2[1] = F.toObject(P([left0, right0]));
 
-  // Levels 1..depth-1 : use updated nodes from cur1[k] as siblings
   for (let k = 1; k < depth; k++) {
     const sibk = cur1[k];
     const b = bits2[k] ? 1n : 0n;
@@ -566,12 +617,11 @@ function computeNewRootsForTransfer({
 
 /* ========================= Circuit entry points ======================== */
 function cfgFor(circuit) { return CIRCUITS[circuit]; }
-
 function loadInputsOrExample(circuit) {
   const cfg = cfgFor(circuit);
   ensureDir(cfg.outDir);
   if (fs.existsSync(cfg.inputFile)) return readJSON(cfg.inputFile, {});
-  // Fall back to exact name, then to base name
+  // clone example to avoid mutation across runs
   return JSON.parse(JSON.stringify(exampleInputs[circuit] ?? exampleInputs[baseCircuit(circuit)] ?? {}));
 }
 
@@ -591,6 +641,17 @@ async function fullProveToJson(wasm, zkey, inputs, outDir, friendlyName) {
   }
   return { proof, publicSignals };
 }
+
+const IDX = {
+  deposit: { COMMITMENT: LABELS.deposit.indexOf("newCommitment") },
+  transfer: {
+    OUT1: LABELS.transfer.indexOf("outCommitment1"),
+    OUT2: LABELS.transfer.indexOf("outCommitment2"),
+    NEW_ROOT1: LABELS.transfer.indexOf("newMerkleRoot1"),
+    NEW_ROOT2: LABELS.transfer.indexOf("newMerkleRoot2"),
+    NEXT_LEAF_INDEX: LABELS.transfer.indexOf("newNextLeafIndex"),
+  },
+};
 
 function getDepositCommitmentFromPublics(publicSignals) {
   return toBig(publicSignals[IDX.deposit.COMMITMENT]);
@@ -621,7 +682,6 @@ function overrideTransferInputs(input, {
     encNote2Hash: bigToDec(encNote2Hash),
   };
 }
-
 function overrideWithdrawPathInputs(input, { siblings, indices }) {
   const out = { ...input };
   out.pathElements = siblings.map(bigToDec);
@@ -635,13 +695,12 @@ async function runDeposit(poseidon, depth, sharedTree, variant = "deposit") {
   const cfg = cfgFor(variant);
   const P = poseidon;
   const inputsRaw = loadInputsOrExample(variant);
-  const inputs = { ...withDepositDefaults(inputsRaw), ...inputsRaw }; // ensure required keys
+  const inputs = { ...withDepositDefaults(inputsRaw), ...inputsRaw };
 
   const tree = sharedTree ?? new PoseidonTree(depth, P);
   const oldRoot = tree.root();
   const nextIdx = tree.nextIndex;
 
-  // siblings/indices for the ZERO leaf at nextLeafIndex (pre-insertion)
   const pathElems = tree.insertionSiblings(nextIdx);
   const pathIdxs  = lsbBits(nextIdx, depth);
 
@@ -652,7 +711,7 @@ async function runDeposit(poseidon, depth, sharedTree, variant = "deposit") {
   const depositHash          = poseidon3(P.F, P, ownerCipherPayPubKey, amount, nonce);
 
   const filled = sanitizeInputs(variant, {
-    ...inputs, // includes the 5 required preimage fields
+    ...inputs,
     amount: String(amount),
     nonce: String(nonce),
     oldMerkleRoot: oldRoot.toString(10),
@@ -673,18 +732,15 @@ async function runTransfer(poseidon, depth, tree, depIdx, variant = "transfer") 
   console.log(`Generating proof for ${variant} circuit...`);
   const cfg = cfgFor(variant);
   const raw = loadInputsOrExample(variant);
-  let inputs = { ...withTransferDefaults(raw), ...raw }; // ensure required keys
+  let inputs = { ...withTransferDefaults(raw), ...raw };
   const P = poseidon;
 
-  // Input membership (deposit commitment)
   const { siblings: inSiblings, indices: inIndices } = tree.path(depIdx);
 
-  // Next insertion positions for out1/out2 on the current tree
   const nextIdx = tree.nextIndex;
   const out1Siblings = tree.insertionSiblings(nextIdx);
   const out2Siblings = tree.insertionSiblings(nextIdx + 1);
 
-  // Compute out1/out2 commitments so we can supply encNote{1,2}Hash
   const out1Commitment = poseidon5(
     P.F, P,
     inputs.out1Amount, inputs.out1RecipientCipherPayPubKey,
@@ -708,7 +764,6 @@ async function runTransfer(poseidon, depth, tree, depIdx, variant = "transfer") 
   });
   inputs = sanitizeInputs(variant, inputs);
 
-  // Pre-compute roots exactly like the circuit (to cross-check pubs)
   const { newRoot1: compRoot1, newRoot2: compRoot2 } = computeNewRootsForTransfer({
     poseidon, depth,
     nextLeafIndex: nextIdx,
@@ -724,7 +779,6 @@ async function runTransfer(poseidon, depth, tree, depIdx, variant = "transfer") 
 
   const { out1, out2, newRoot1, newRoot2 } = getTransferOutputsFromPublics(publicSignals);
 
-  // Append to actual tree to get FINAL root (after out2)
   const j1 = tree.append(out1);
   const j2 = tree.append(out2);
 
@@ -735,7 +789,6 @@ async function runTransfer(poseidon, depth, tree, depIdx, variant = "transfer") 
   console.log("• (transfer) newMerkleRoot2 (pubs)              =", newRoot2.toString(10));
   console.log("• (transfer) out1 index =", j1, "out2 index =", j2);
 
-  // Persist out2 path snapshot (from FINAL tree)
   const mid = tree.path(j2);
   writeJSON(path.join(cfg.outDir, "out2_paths.json"), {
     pre_siblings_dec: out2Siblings.map(bigToDec),
@@ -749,9 +802,8 @@ async function runWithdraw_spendOut2(poseidon, depth, tree, j2, newRoot2FromTran
   console.log(`Generating proof for ${variant} circuit...`);
   const cfg = cfgFor(variant);
   const raw = loadInputsOrExample(variant);
-  let inputs = { ...withWithdrawDefaults(raw), ...raw }; // ensure required keys
+  let inputs = withWithdrawDefaults(raw);
 
-  // Path for out2 ON THE FINAL TREE (after out2 insertion)
   const { siblings, indices } = tree.path(j2);
 
   console.log("• (withdraw) spending output: out2");
@@ -759,7 +811,6 @@ async function runWithdraw_spendOut2(poseidon, depth, tree, j2, newRoot2FromTran
   console.log("• (withdraw) pathIndices[0..8]  =", indices.slice(0, 9).join(", "), "…");
   console.log("• (withdraw) pathElements[0..4] =", siblings.slice(0, 5).map(bigToDec).join(", "), "…");
 
-  // Cross-check root from path equals transfer.newMerkleRoot2
   const rootFromPath = PoseidonTree.computeRootFromPath(poseidon, out2Commitment, siblings, indices);
   console.log("• (withdraw) merkleRoot (used)  =", rootFromPath.toString(10));
   console.log("• (transfer) newMerkleRoot2     =", newRoot2FromTransfer.toString(10));
@@ -777,9 +828,8 @@ async function runWithdraw_spendOut2(poseidon, depth, tree, j2, newRoot2FromTran
     throw new Error("withdraw: merkle root != transfer.newMerkleRoot2");
   }
 
-  // Prepare witness inputs
   inputs = overrideWithdrawPathInputs(inputs, { siblings, indices });
-  inputs.commitment = bigToDec(out2Commitment); // circuit expects private 'commitment'
+  inputs.commitment = bigToDec(out2Commitment);
   inputs = sanitizeInputs(variant, inputs);
 
   await fullProveToJson(cfg.wasm, cfg.zkey, inputs, cfg.outDir, variant);
@@ -807,9 +857,6 @@ function ensurePublicsPresent(name) {
   if (!j) throw new Error(`Missing ${f} — run 'all' first to generate pipeline outputs.`);
   return j;
 }
-
-// Rebuild leaves in order up to a given suffix count (0..3),
-// each pipeline contributes 3 leaves: deposit, out1, out2.
 function rebuildTreeUpToSuffix(depth, poseidon, maxSuffix = 0) {
   const tree = new PoseidonTree(depth, poseidon);
   let lastOut2 = null;
@@ -864,14 +911,13 @@ async function runAll(depth = DEFAULT_DEPTH) {
     const poseidon = await circomlib.buildPoseidon();
 
     if (/^deposit\d*$/.test(cmd)) {
-      const tree = new PoseidonTree(depth, poseidon); // fresh
+      const tree = new PoseidonTree(depth, poseidon);
       await runDeposit(poseidon, depth, tree, cmd);
       console.log(`\n✅ ${cmd} completed (JSON written to build/${cmd}/)`);
       process.exit(0);
     }
 
     if (/^transfer\d*$/.test(cmd)) {
-      // Rebuild minimal state: needs deposit of same suffix
       const depName = cmd.replace(/^transfer/, "deposit");
       const depPubs = ensurePublicsPresent(depName);
       const depCommitment = getDepositCommitmentFromPublics(depPubs);
@@ -883,7 +929,6 @@ async function runAll(depth = DEFAULT_DEPTH) {
     }
 
     if (/^withdraw\d*$/.test(cmd)) {
-      // Rebuild full tree up to that suffix
       const sfx = cmd.replace("withdraw", "");
       const maxSuffix = sfx === "" ? 0 : Number(sfx);
       const { tree, j2, out2, newRoot2 } = rebuildTreeUpToSuffix(depth, poseidon, maxSuffix);
@@ -899,15 +944,19 @@ async function runAll(depth = DEFAULT_DEPTH) {
     console.log("  node scripts/generate-example-proof.js deposit1|transfer1|withdraw1");
     console.log("  node scripts/generate-example-proof.js deposit2|transfer2|withdraw2");
     console.log("  node scripts/generate-example-proof.js deposit3|transfer3|withdraw3");
+    console.log("\nEnv for withdraw recipient binding (base58 or 32-byte hex):");
+    console.log("  RECIPIENT_OWNER_SOL_B58=<base58 pubkey>  # preferred");
+    console.log("  or RECIPIENT_OWNER_SOL=<base58 pubkey>   # alias");
+    console.log("  or RECIPIENT_OWNER_SOL_HEX=<64-hex-bytes>");
     process.exit(1);
   } catch (err) {
     console.error("❌ Proof generation failed:", err.message || err);
     console.error(
       "   Hints:\n" +
         "    • Ensure WASM/ZKEY exist under build/*/*_js and build/*/*_final.zkey.\n" +
-        "    • Withdraw(out2) uses the FINAL tree path; we pass 'commitment' privately.\n" +
+        "    • Withdraw(out2) uses the FINAL tree path; we pass `commitment` privately.\n" +
         "    • Unknown keys are stripped to avoid `Signal not found`.\n" +
-        "    • LABELS are reused for numbered variants via base-name matching.\n"
+        "    • Provide recipient owner via RECIPIENT_OWNER_SOL_B58 (or HEX) or keep it in example JSON.\n"
     );
     if (process.env.DEBUG) console.error(err);
     process.exit(1);

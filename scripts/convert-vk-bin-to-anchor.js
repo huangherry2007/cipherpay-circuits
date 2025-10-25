@@ -18,7 +18,8 @@ const path = require("path");
  *   IC               : (nPublic + 1) * 64 bytes (G1)
  *
  * Defaults:
- *   - Endianness: little-endian (LE) per groth16-solana expectations.
+ *   - Endianness: big-endian (BE) for VK (matches cipherpay-anchor verifier).
+ *     (Proof and public signals are converted by other scripts as LE.)
  *   - `vk_alphabeta_12` is EXCLUDED unless you pass --include-alphabeta.
  *   - IC length must equal (nPublic + 1) unless --force or --ic=N is given.
  */
@@ -246,7 +247,7 @@ function printHelp() {
   node scripts/convert-vk-to-bin.js -i <verification_key.json> -o <output.bin> [options]
 
 Options:
-  --endianness=<le|be>     Field-element endianness (default: le)
+  --endianness=<le|be>     Field-element endianness (default: be)
   --include-alphabeta      Include vk_alphabeta_12 if present (default: off)
   --ic=<nPublic>           Override nPublic (IC must then be nPublic+1)
   --force                  Do not abort on IC length mismatch; print warning instead
